@@ -1,0 +1,25 @@
+# Version / build-info disclosure endpoints. Industry-standard; these
+# patterns appear across frameworks regardless of application domain.
+#
+# The probe fetches each path, extracts a semver-looking token from the
+# response, and matches against a known-vulnerable-pins list (separate
+# file, kept small).
+
+version
+api/version
+api/v1/version
+api/v2/version
+v1/version
+info
+api/info
+build
+api/build
+about
+api/about
+manifest.json
+app/version
+_version
+system/version
+admin/version
+admin/info
+rest/admin/application-version

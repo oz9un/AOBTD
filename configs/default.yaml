@@ -1,0 +1,26 @@
+proxy:
+  listen_addr: "127.0.0.1"
+  port: 8089
+
+browser:
+  headless: false
+  timeout: 30s
+
+llm:
+  provider: "anthropic"
+  model: "claude-sonnet-4-20250514"
+  api_key: ""  # Set via AOBTD_LLM_API_KEY env var
+  budget:
+    max_input_tokens: 2000000
+    max_output_tokens: 500000
+    max_cost_cents: 500  # $5.00
+
+scan:
+  max_depth: 10
+  max_pages: 500
+  crawl_timeout: 30m
+  scope: []  # Empty = target domain only
+
+output:
+  dir: "./aobtd-output"
+  format: "json"

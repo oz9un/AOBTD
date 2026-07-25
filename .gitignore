@@ -1,0 +1,92 @@
+# Compiled Go binaries — we build these locally with `go build`
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Scan output directories — contain large SQLite DBs + screenshots + frames.
+# Safe to regenerate by running a new scan.
+aobtd-output/
+aobtd-output-*/
+aobtd-smoke-output/
+aobtd-smoke-output-*/
+aobtd-smoke-output2/
+aobtd-bwapp-*/
+aobtd-crawl-*/
+aobtd-defcon-*/
+aobtd-login-*/
+aobtd-mm-*/
+aobtd-redirect-*/
+*.db
+*.db-shm
+*.db-wal
+
+# Local-built binary without extension (Windows/Linux-named `aobtd`)
+/aobtd
+
+# Agent / editor local state
+.claude/
+.vscode/
+.idea/
+
+# Go build / test artifacts
+*.test
+*.out
+coverage.out
+/tmp/
+/vendor/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local env / secrets (we store keys in ~/.aobtd-*-key, but safeguard anyway)
+.env
+.env.local
+*.key
+!internal/**/*.key     # don't swallow any package-internal files that happen to end in .key
+
+# Logs
+*.log
+
+# Temporary
+*~
+*.swp
+*.bak
+
+# Development session notes (dev-loop reports, morning handoffs, etc.) —
+# useful locally, not part of the public project surface.
+MORNING_REPORT*.md
+OVERNIGHT_LOG*.md
+WAKE_UP*.md
+NIGHT_*.md
+HANDOFF*.md
+
+# Demo Labs / conference submission materials — local only, not for public repo.
+DEMOLABS_OUTLINE.txt
+DEMOLABS_*.txt
+DEMOLABS_*.pdf
+
+# Internal dev / planning docs — kept locally, not for the public repo.
+ARCHITECTURE_OPTIONS.md
+TEST_PLAN.md
+
+# Local outputs (slide decks, brand concepts, challenge run logs) — kept locally, not for the public repo
+outputs/
+# Python cache + benchmark result dirs
+**/__pycache__/
+bench/site_understanding_*/
+# Old UI-iteration screenshots (superseded)
+docs/screenshots/
+
+# MITM proxy certs (CA private key) + captured browser frames — never commit
+certs/
+frames/
+
+# Presentation deck — local only; the public repo is code-only
+docs/slides/
+
+# Public repo is code-only; keep docs local
+/ARCHITECTURE.md
+docs/

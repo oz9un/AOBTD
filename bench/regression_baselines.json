@@ -1,0 +1,82 @@
+{
+  "crapi": {
+    "min_confirmed": 4,
+    "min_retest_ready": 4,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "info_disclosure",
+      "api_data_exposure",
+      "idor"
+    ]
+  },
+  "dvga": {
+    "min_confirmed": 3,
+    "min_retest_ready": 3,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "graphql_data_exposure",
+      "graphql_introspection",
+      "attack_chain"
+    ]
+  },
+  "dvwa": {
+    "min_confirmed": 4,
+    "min_retest_ready": 4,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "command_injection",
+      "sqli",
+      "attack_chain"
+    ]
+  },
+  "juice": {
+    "min_confirmed": 50,
+    "min_retest_ready": 50,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "sqli",
+      "jwt_unsigned",
+      "path_traversal",
+      "xss_browser"
+    ]
+  },
+  "vampi": {
+    "min_confirmed": 4,
+    "min_retest_ready": 4,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "debug_console_exposure",
+      "api_data_exposure",
+      "required_field_validation_bypass"
+    ]
+  },
+  "webgoat": {
+    "min_confirmed": 3,
+    "min_retest_ready": 3,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "sqli",
+      "xxe"
+    ]
+  },
+  "vulnerableapp": {
+    "min_confirmed": 80,
+    "min_retest_ready": 80,
+    "min_avg_proof": 5.0,
+    "required_types": [
+      "CLIENT_SIDE_VULNERABLE_JWT",
+      "INSECURE_CONFIGURATION_JWT",
+      "SERVER_SIDE_VULNERABLE_JWT",
+      "clickjacking",
+      "command_injection",
+      "file_upload_size_bypass",
+      "file_upload_type_bypass",
+      "ldap_injection",
+      "open_redirect",
+      "path_traversal",
+      "persistent_xss",
+      "reflected_xss",
+      "sqli"
+    ]
+  }
+}

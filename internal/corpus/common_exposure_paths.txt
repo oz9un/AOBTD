@@ -1,0 +1,134 @@
+# Common unauthenticated disclosure paths.
+#
+# Industry-standard; curated from SecLists / Nuclei / Dirb common wordlists.
+# Every entry must be the kind of path a security researcher would probe
+# against ANY target, not specific to a single application.
+#
+# Lines beginning with # are comments. Blank lines ignored.
+
+# ── Version control leaks ─────────────────────────────────────────────
+.git/config
+.git/HEAD
+.git/index
+.svn/entries
+.hg/hgrc
+.bzr/branch/last-revision
+
+# ── Environment / config files ────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.development
+.dockerenv
+config.json
+config.yaml
+config.yml
+application.properties
+application.yml
+appsettings.json
+web.config
+.aws/credentials
+.ssh/id_rsa
+.ssh/authorized_keys
+.npmrc
+.pypirc
+
+# ── Debug / dev endpoints ─────────────────────────────────────────────
+debug
+debug/vars
+_debug
+trace
+phpinfo.php
+info.php
+test.php
+server-status
+server-info
+
+# ── Health / actuator (Spring Boot, Micronaut, etc.) ─────────────────
+health
+status
+ping
+actuator
+actuator/health
+actuator/env
+actuator/beans
+actuator/mappings
+actuator/threaddump
+actuator/heapdump
+actuator/configprops
+
+# ── Prometheus / metrics ──────────────────────────────────────────────
+metrics
+prometheus
+stats
+admin/metrics
+
+# ── API spec / docs ───────────────────────────────────────────────────
+api-docs
+api-docs/
+swagger
+swagger-ui
+swagger-ui.html
+swagger/v1/swagger.json
+openapi.json
+openapi.yaml
+graphql
+graphiql
+playground
+
+# ── Admin panels ──────────────────────────────────────────────────────
+admin
+admin/
+administrator
+wp-admin/
+phpmyadmin/
+pgadmin/
+adminer.php
+
+# ── Backup file patterns (appended to common filenames) ──────────────
+backup
+backup.sql
+backup.zip
+backup.tar.gz
+database.sql
+db.sql
+dump.sql
+
+# ── CI / build artifacts ──────────────────────────────────────────────
+.travis.yml
+.github/workflows
+Jenkinsfile
+.circleci/config.yml
+.gitlab-ci.yml
+
+# ── Cloud metadata (only useful when app proxies outbound) ────────────
+# (handled separately by SSRF probes)
+
+# ── Common framework-leak paths ───────────────────────────────────────
+package.json
+package-lock.json
+composer.json
+requirements.txt
+Gemfile
+Gemfile.lock
+go.mod
+yarn.lock
+
+# ── Log files ─────────────────────────────────────────────────────────
+logs
+log
+access.log
+error.log
+debug.log
+support/logs
+support/logs/
+
+# ── Directory indexes / web-root artifact folders ────────────────────
+ftp/
+files/
+downloads/
+docs/
+documents/
+uploads/
+encryptionkeys/
+keys/
