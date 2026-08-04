@@ -1,0 +1,14 @@
+name = "aobtd-oast"
+main = "src/index.js"
+compatibility_date = "2026-08-04"
+workers_dev = true
+
+[[routes]]
+pattern = "oast.aobtd.com"
+custom_domain = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aobtd-oast"
+database_id = "1cf20b4b-2b9c-4ffc-af08-c384d3bc9671"
+migrations_dir = "migrations"

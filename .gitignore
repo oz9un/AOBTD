@@ -35,6 +35,8 @@ aobtd-redirect-*/
 coverage.out
 /tmp/
 /vendor/
+/deploy/cloudflare-oast/node_modules/
+/deploy/cloudflare-oast/.wrangler/
 
 # OS noise
 .DS_Store
@@ -44,6 +46,7 @@ desktop.ini
 # Local env / secrets (we store keys in ~/.aobtd-*-key, but safeguard anyway)
 .env
 .env.local
+.dev.vars
 *.key
 !internal/**/*.key     # don't swallow any package-internal files that happen to end in .key
 

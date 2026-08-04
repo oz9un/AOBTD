@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -30,6 +31,7 @@ import (
 	"github.com/ozzyw/aobtd/internal/corpus"
 	"github.com/ozzyw/aobtd/internal/discovery"
 	"github.com/ozzyw/aobtd/internal/extract"
+	"github.com/ozzyw/aobtd/internal/oast"
 	"github.com/ozzyw/aobtd/internal/policy"
 	"github.com/ozzyw/aobtd/internal/reasoner"
 	"github.com/ozzyw/aobtd/internal/redact"
@@ -40,13 +42,14 @@ import (
 // VerifierAgent takes issues flagged by the analyzer and actually tests them.
 // It sends real requests with payloads to confirm or dismiss findings.
 type VerifierAgent struct {
-	db        *store.DB
-	scanID    int64
-	logger    *slog.Logger
-	client    *http.Client
-	browser   *browser.Controller
-	target    string
-	authority policy.TestingAuthority
+	db         *store.DB
+	scanID     int64
+	logger     *slog.Logger
+	client     *http.Client
+	browser    *browser.Controller
+	target     string
+	authority  policy.TestingAuthority
+	oastClient *oast.Client
 
 	// learnedAuthHeaders stores same-origin credentials obtained during
 	// verification itself (for example, a token returned by a confirmed login
@@ -63,6 +66,8 @@ type VerifierAgent struct {
 	tested    int
 	confirmed int
 	dismissed int
+
+	ssrfAttempted map[string]bool
 }
 
 // NewVerifierAgent creates a verifier agent.
@@ -81,7 +86,7 @@ func NewVerifierAgent(db *store.DB, scanID int64, executionPolicy *policy.Engine
 			return nil
 		},
 	}
-	return &VerifierAgent{
+	verifier := &VerifierAgent{
 		db:        db,
 		scanID:    scanID,
 		logger:    logger,
@@ -93,12 +98,26 @@ func NewVerifierAgent(db *store.DB, scanID int64, executionPolicy *policy.Engine
 			Audit:            audit,
 		}),
 	}
+	oastClient, err := oast.FromEnv()
+	if err != nil {
+		logger.Warn("verifier: OAST configuration disabled", "error", err)
+	} else {
+		verifier.oastClient = oastClient
+	}
+	return verifier
 }
 
 func (v *VerifierAgent) Name() string { return "verifier" }
 
 func (v *VerifierAgent) SetBrowser(ctrl *browser.Controller) {
 	v.browser = ctrl
+}
+
+// SetOASTClient overrides environment-derived OAST configuration. It exists so
+// integration tests can use an isolated callback service without process-wide
+// secrets.
+func (v *VerifierAgent) SetOASTClient(client *oast.Client) {
+	v.oastClient = client
 }
 
 // Start runs verification on all flagged issues.
@@ -160,6 +179,9 @@ func (v *VerifierAgent) Start(ctx context.Context) error {
 			v.verifyIssue(ctx, profile, entries[0], issue)
 		}
 	}
+	if v.proactive {
+		v.probeObservedSSRFCandidates(ctx, profiles)
+	}
 
 	v.logger.Info("verifier complete",
 		"tested", v.tested,
@@ -198,6 +220,10 @@ func (v *VerifierAgent) verifyIssue(ctx context.Context, profile types.PageProfi
 		strings.Contains(issueLower, "redirect to arbitrary") ||
 		strings.Contains(issueLower, "redirects to arbitrary"):
 		v.verifyOpenRedirect(ctx, profile, entry, issue)
+	case strings.Contains(issueLower, "ssrf") ||
+		strings.Contains(issueLower, "server-side request forgery") ||
+		strings.Contains(issueLower, "server side request forgery"):
+		v.verifySSRF(ctx, profile, entry, issue)
 	case strings.Contains(issueLower, "ldap"):
 		v.probeLDAPInjection(ctx, v.resolveTargetBase())
 	case strings.Contains(issueLower, "sql") ||
@@ -408,6 +434,298 @@ func isAllDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// ── HTTP OAST / SSRF Verification ──
+
+const ssrfOASTWait = 12 * time.Second
+
+type ssrfProbeTarget struct {
+	profile types.PageProfile
+	entry   types.TrafficEntry
+	param   string
+	source  string
+}
+
+type ssrfProbeResult struct {
+	ssrfProbeTarget
+	token       string
+	callbackURL string
+	started     time.Time
+	status      int
+	body        string
+	event       *oast.Event
+	err         error
+	inBand      bool
+}
+
+func (v *VerifierAgent) verifySSRF(ctx context.Context, profile types.PageProfile, entry types.TrafficEntry, issue string) {
+	if v.oastClient == nil {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "unverified — SSRF-shaped issue found, but HTTP OAST is not configured",
+			Description: "The analyzer identified a possible server-side URL fetch. Configure AOBTD_OAST_BASE_URL, AOBTD_OAST_API_TOKEN, and AOBTD_OAST_SIGNING_KEY to require a correlated callback before confirmation.",
+			VulnType:    "ssrf",
+		})
+		return
+	}
+
+	params := make([]string, 0, 4)
+	if param := extractParamFromIssue(issue); param != "" {
+		params = append(params, param)
+	}
+	params = append(params, ssrfCandidateParams(profile, entry)...)
+	params = ssrfUniqueStrings(params)
+	if len(params) == 0 {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "unverified — SSRF issue did not identify a mutable URL parameter",
+			Description: "The issue may involve a URL embedded in a path, header, or nested body value that the current HTTP OAST probe cannot mutate safely.",
+			VulnType:    "ssrf",
+		})
+		return
+	}
+
+	attempted := false
+	for _, param := range params {
+		result := v.startSSRFProbe(ctx, ssrfProbeTarget{
+			profile: profile, entry: entry, param: param, source: "analyzer issue: " + issue,
+		})
+		if result == nil {
+			continue
+		}
+		attempted = true
+		if !result.inBand && result.err == nil {
+			result.event, result.err = v.oastClient.WaitForEvent(ctx, result.token, result.started, ssrfOASTWait)
+		}
+		if result.inBand || result.event != nil {
+			v.storeConfirmedSSRFFinding(result)
+			return
+		}
+	}
+	if attempted {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "HTTP OAST payload sent; no correlated callback or in-band canary was observed during the bounded verification window",
+			Description: "The SSRF hypothesis remains unconfirmed. A missing callback can also mean asynchronous processing, DNS-only behavior, or blocked outbound HTTP, so it is not treated as a dismissal.",
+			VulnType:    "ssrf",
+		})
+	}
+}
+
+// probeObservedSSRFCandidates exercises concrete URL-shaped inputs even when
+// the analyzer did not phrase them as an issue. Requests are sent first and
+// callbacks are awaited concurrently so a batch costs one bounded OAST window.
+func (v *VerifierAgent) probeObservedSSRFCandidates(ctx context.Context, profiles []types.PageProfile) {
+	if v.oastClient == nil {
+		return
+	}
+	const maxCandidates = 12
+	results := make([]*ssrfProbeResult, 0, maxCandidates)
+	for _, profile := range profiles {
+		if ctx.Err() != nil || len(results) >= maxCandidates || profile.ID == "attack_surface" {
+			break
+		}
+		entries := v.findTrafficForProfile(profile)
+		if len(entries) == 0 || ssrfTelemetryLikePath(entries[0].Request.Path) {
+			continue
+		}
+		params := ssrfCandidateParams(profile, entries[0])
+		if len(params) == 0 {
+			continue
+		}
+		result := v.startSSRFProbe(ctx, ssrfProbeTarget{
+			profile: profile, entry: entries[0], param: params[0], source: "observed URL-shaped input",
+		})
+		if result != nil {
+			results = append(results, result)
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+
+	v.db.InsertNarration(v.scanID, "verifier", "attempt",
+		fmt.Sprintf("Sent %d signed HTTP OAST probe(s) to observed URL-fetch candidates; waiting once for correlated callbacks.", len(results)),
+		"", nil)
+	var wg sync.WaitGroup
+	for _, result := range results {
+		if result.inBand || result.err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func(result *ssrfProbeResult) {
+			defer wg.Done()
+			result.event, result.err = v.oastClient.WaitForEvent(ctx, result.token, result.started, ssrfOASTWait)
+		}(result)
+	}
+	wg.Wait()
+	for _, result := range results {
+		if result.inBand || result.event != nil {
+			v.storeConfirmedSSRFFinding(result)
+		}
+	}
+}
+
+func (v *VerifierAgent) startSSRFProbe(ctx context.Context, target ssrfProbeTarget) *ssrfProbeResult {
+	key := target.profile.ID + "|" + strings.ToLower(target.param)
+	if v.ssrfAttempted == nil {
+		v.ssrfAttempted = make(map[string]bool)
+	}
+	if v.ssrfAttempted[key] {
+		return nil
+	}
+	v.ssrfAttempted[key] = true
+
+	token, callbackURL, err := v.oastClient.NewProbe()
+	if err != nil {
+		v.logger.Warn("verifier: create OAST probe", "error", err)
+		return nil
+	}
+	result := &ssrfProbeResult{
+		ssrfProbeTarget: target,
+		token:           token, callbackURL: callbackURL, started: time.Now().Add(-time.Second),
+	}
+	method := strings.ToUpper(strings.TrimSpace(target.entry.Request.Method))
+	var resp *http.Response
+	if method == "" || method == http.MethodGet {
+		resp, result.body, result.err = v.sendGETWithParam(ctx, target.entry.Request.URL, target.param, callbackURL, target.entry.Request.Headers)
+	} else if method == http.MethodPost {
+		resp, result.body, result.err = v.sendPOSTWithParam(ctx, target.entry.Request.URL, target.param, callbackURL, target.entry.Request.Headers, target.entry.Request.Body)
+	} else {
+		return nil
+	}
+	v.tested++
+	if resp != nil {
+		result.status = resp.StatusCode
+	}
+	result.inBand = strings.Contains(result.body, "AOBTD_OAST_PROOF:"+token)
+	v.db.InsertNarration(v.scanID, "verifier", "attempt",
+		fmt.Sprintf("Testing %s parameter %q with a signed HTTP OAST callback URL.", target.profile.ID, target.param),
+		target.entry.Request.URL, map[string]any{"param": target.param, "callback_url": callbackURL})
+	return result
+}
+
+func (v *VerifierAgent) storeConfirmedSSRFFinding(result *ssrfProbeResult) {
+	v.confirmed++
+	method := strings.ToUpper(strings.TrimSpace(result.entry.Request.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	path := result.entry.Request.Path
+	if path == "" {
+		path = csrfEndpointPath(result.entry.Request.URL)
+	}
+	proofKind := "target response contained the callback service's unique canary"
+	callbackEvidence := "In-band canary returned through the target response"
+	if result.event != nil {
+		proofKind = "the callback service received a token-correlated HTTP request"
+		callbackEvidence = fmt.Sprintf("Callback: %s %s\nReceived at: %s\nSource IP: %s\nCloudflare colo: %s",
+			result.event.Method, result.event.Path,
+			time.UnixMilli(result.event.ReceivedAtMS).UTC().Format(time.RFC3339Nano),
+			result.event.SourceIP, result.event.Colo)
+	}
+	pocRequest := buildXSSRequest(method, result.entry.Request.URL, result.param, result.callbackURL, result.entry.Request.Headers, result.entry.Request.Body)
+	pocResponse := fmt.Sprintf("Target response status: %d\n%s", result.status, callbackEvidence)
+	evidence := fmt.Sprintf("Parameter: %s\nPayload: %s\nProof: %s\n%s\nSource: %s",
+		result.param, result.callbackURL, proofKind, callbackEvidence, result.source)
+	v.storeFinding(result.profile, types.Finding{
+		Title:       fmt.Sprintf("Server-Side Request Forgery via %q", result.param),
+		Description: fmt.Sprintf("The %s %s endpoint accepted an operator-controlled URL in %q and caused a request correlated by a unique AOBTD OAST token; %s.", method, path, result.param, proofKind),
+		Severity:    types.SeverityHigh,
+		Confidence:  types.ConfidenceConfirmed,
+		VulnType:    "ssrf",
+		ParamName:   result.param,
+		Payload:     result.callbackURL,
+		PocRequest:  pocRequest,
+		PocResponse: pocResponse,
+		StepsToReproduce: fmt.Sprintf("1. Generate a fresh signed callback URL.\n2. Send %s %s with `%s=%s`.\n3. Observe the unique canary in the target response or poll the callback service for the matching token.\n4. Confirm the callback timestamp occurs after the probe request.",
+			method, path, result.param, result.callbackURL),
+		Impact:      "An attacker can make the application server initiate network requests to attacker-controlled destinations. Depending on egress and destination controls, this can expose internal services, cloud metadata, or trusted network resources.",
+		Remediation: "Do not fetch arbitrary user-supplied URLs. Resolve destinations server-side against a strict scheme/host/port allowlist, reject private/link-local/reserved IP ranges after every DNS resolution and redirect, and apply outbound network egress controls.",
+		Evidence:    evidence,
+		TrafficIDs: func() []int64 {
+			if result.entry.ID > 0 {
+				return []int64{result.entry.ID}
+			}
+			return nil
+		}(),
+	})
+	v.db.InsertNarration(v.scanID, "verifier", "confirmed",
+		fmt.Sprintf("SSRF confirmed on %s parameter %q with a correlated HTTP OAST proof.", result.profile.ID, result.param),
+		result.entry.Request.URL, map[string]any{"param": result.param, "callback_url": result.callbackURL})
+}
+
+func ssrfCandidateParams(profile types.PageProfile, entry types.TrafficEntry) []string {
+	params := make([]string, 0, 8)
+	for _, input := range append(append([]types.Input{}, profile.Inputs...), profile.ExtractedInputs...) {
+		if looksLikeSSRFParam(input.Name) || strings.Contains(strings.ToLower(input.Explanation), "ssrf") {
+			params = append(params, input.Name)
+		}
+	}
+	if parsed, err := url.Parse(entry.Request.URL); err == nil {
+		for name, values := range parsed.Query() {
+			if looksLikeSSRFParam(name) || valuesContainAbsoluteURL(values) {
+				params = append(params, name)
+			}
+		}
+	}
+	return ssrfUniqueStrings(params)
+}
+
+func looksLikeSSRFParam(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if idx := strings.LastIndexAny(name, ".[]"); idx >= 0 && idx+1 < len(name) {
+		name = name[idx+1:]
+	}
+	name = strings.ReplaceAll(name, "-", "_")
+	switch name {
+	case "url", "uri", "target", "destination", "dest", "feed", "endpoint", "webhook", "callback_url", "image_url", "avatar_url", "source_url", "fetch_url", "remote_url":
+		return true
+	default:
+		return strings.HasSuffix(name, "_url") || strings.HasSuffix(name, "_uri")
+	}
+}
+
+func valuesContainAbsoluteURL(values []string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(strings.TrimSpace(value))
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return true
+		}
+	}
+	return false
+}
+
+func ssrfTelemetryLikePath(path string) bool {
+	path = strings.ToLower(path)
+	for _, marker := range []string{"/rum", "/telemetry", "/analytics", "/metrics/collect", "/ces/v1/"} {
+		if strings.Contains(path, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func ssrfUniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := values[:0]
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := strings.ToLower(value)
+		if value == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 // ── XSS Verification ──
