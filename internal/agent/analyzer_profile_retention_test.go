@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ozzyw/aobtd/internal/extract"
@@ -44,6 +46,64 @@ func TestSalvagePageProfileRequiresCompleteGroundedIdentity(t *testing.T) {
 	body := `{"id":"GET /login","url":"https://example.test/login","purpose":"unfinished`
 	if got := salvagePageProfileFromPartial(body); got != nil {
 		t.Fatalf("incomplete purpose was promoted: %+v", got)
+	}
+}
+
+func TestParseProfileRepairsMiniMaxJSONStringRepeatExpression(t *testing.T) {
+	analyzer := &AnalyzerAgent{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	body := `{
+  "id":"POST /api/Complaints/",
+  "url":"http://juice-shop.test:3000/api/Complaints/",
+  "method":"POST",
+  "purpose":"Submit a customer complaint.",
+  "confidence":0.82,
+  "follow_ups":[{
+    "action":"probe_logic",
+    "url":"http://juice-shop.test:3000/api/Complaints/",
+    "field":"message",
+    "test_values":["A".repeat(10000),""],
+    "reason":"Check bounded length validation."
+  }]
+}`
+	got := analyzer.parseProfile(body)
+	if got == nil {
+		t.Fatal("MiniMax profile with a JavaScript-style repeat expression was not repaired")
+	}
+	if got.ID != "POST /api/Complaints/" || got.Confidence != 0.82 {
+		t.Fatalf("complete profile was degraded instead of repaired: %+v", got)
+	}
+	var repaired map[string]any
+	if err := json.Unmarshal([]byte(repairModelJSONExpressions(body)), &repaired); err != nil {
+		t.Fatalf("repaired response is not valid JSON: %v", err)
+	}
+	if !strings.Contains(repairModelJSONExpressions(body), `"A (repeat 10000 times)"`) {
+		t.Fatalf("unsafe repeat expression was not converted to a bounded descriptive literal")
+	}
+}
+
+func TestParseProfileRepairsMiniMaxDroppedIDPrefix(t *testing.T) {
+	analyzer := &AnalyzerAgent{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	body := `": "GET /index.php",
+  "url": "http://127.0.0.1:4280/index.php",
+  "method": "GET",
+  "purpose": "DVWA landing page listing vulnerability modules.",
+  "confidence": 0.82,
+  "inputs": [],
+  "issues": []
+}`
+	got := analyzer.parseProfile(body)
+	if got == nil {
+		t.Fatal("MiniMax profile with dropped id prefix was not repaired")
+	}
+	if got.ID != "GET /index.php" || got.URL != "http://127.0.0.1:4280/index.php" || got.Confidence != 0.82 {
+		t.Fatalf("wrong repaired profile: %+v", got)
+	}
+}
+
+func TestRepairDroppedProfileIDPrefixRequiresProfileShape(t *testing.T) {
+	body := `": "GET /index.php", "url": "http://127.0.0.1:4280/index.php"}`
+	if got := repairDroppedProfileIDPrefix(body); got != body {
+		t.Fatalf("fragment without profile shape was repaired: %q", got)
 	}
 }
 

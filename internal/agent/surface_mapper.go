@@ -201,6 +201,9 @@ func (s *SurfaceMapper) extractInputs() []InputSurface {
 				decoder.UseNumber()
 				if decoder.Decode(&jsonBody) == nil {
 					for _, parameter := range flattenSurfaceJSON(jsonBody, "", 0, 100) {
+						if ignoreSurfaceBodyParam(r.path, parameter.name) {
+							continue
+						}
 						inputType, attackType := classifyInput(parameter.name, parameter.value)
 						inputs = append(inputs, InputSurface{
 							Endpoint: endpoint, ParamName: parameter.name, Location: "body",
@@ -211,6 +214,9 @@ func (s *SurfaceMapper) extractInputs() []InputSurface {
 				}
 			} else if strings.Contains(ct, "form") {
 				for _, parameter := range parseSurfaceValues(string(r.body)) {
+					if ignoreSurfaceBodyParam(r.path, parameter.name) {
+						continue
+					}
 					inputType, attackType := classifyInput(parameter.name, parameter.value)
 					inputs = append(inputs, InputSurface{
 						Endpoint: endpoint, ParamName: parameter.name, Location: "body",
@@ -223,6 +229,27 @@ func (s *SurfaceMapper) extractInputs() []InputSurface {
 	}
 
 	return inputs
+}
+
+// Browser monitoring SDKs send large, deeply nested payloads whose fields
+// contain names such as view.url, context.page.url, and source_url. Those are
+// client telemetry facts, not application controls that a pentester can
+// meaningfully probe as SSRF inputs. Keep the raw traffic, but prevent a
+// telemetry envelope from dominating the application testing queue.
+func ignoreSurfaceBodyParam(path, name string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	name = strings.ToLower(strings.TrimSpace(name))
+	telemetryPath := strings.HasPrefix(path, "/awe/api/v2/rum") ||
+		strings.HasPrefix(path, "/ces/v1/") ||
+		strings.HasPrefix(path, "/ces/statsc/") ||
+		strings.HasPrefix(path, "/cdn-cgi/challenge-platform/") ||
+		strings.Contains(path, "/telemetry/")
+	if !telemetryPath {
+		return false
+	}
+	return strings.Contains(name, "url") || strings.Contains(name, "uri") ||
+		strings.HasPrefix(name, "context.") || strings.HasPrefix(name, "view.") ||
+		strings.HasPrefix(name, "long_task.") || strings.HasPrefix(name, "properties.")
 }
 
 type surfaceValue struct {

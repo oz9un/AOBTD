@@ -1079,6 +1079,53 @@ func (db *DB) MarkEndpointAnalyzed(scanID int64, endpointHash string, batchNum i
 	return err
 }
 
+// AcknowledgeEquivalentAnalyzedEvidence advances the analysis watermark for
+// fresh captures that are materially identical to evidence already consumed
+// for the same endpoint family. Changed status, response shape/body, auth,
+// input/schema flags, API classification, or protection behavior remains
+// unanalyzed and therefore re-enters the priority queue.
+func (db *DB) AcknowledgeEquivalentAnalyzedEvidence(scanID int64) (int64, error) {
+	result, err := db.conn.Exec(`
+		UPDATE traffic AS fresh
+		SET is_ai_analyzed = TRUE,
+		    analysis_batch = COALESCE((
+		      SELECT MAX(prior.analysis_batch)
+		      FROM traffic prior
+		      WHERE prior.scan_id = fresh.scan_id
+		        AND prior.endpoint_hash = fresh.endpoint_hash
+		        AND prior.is_ai_analyzed = TRUE
+		    ), fresh.analysis_batch)
+		WHERE fresh.scan_id = ?
+		  AND fresh.is_ai_analyzed = FALSE
+		  AND fresh.is_filtered = FALSE
+		  AND fresh.is_duplicate = FALSE
+		  AND fresh.endpoint_hash != ''
+		  AND EXISTS (
+		    SELECT 1
+		    FROM traffic prior
+		    WHERE prior.scan_id = fresh.scan_id
+		      AND prior.endpoint_hash = fresh.endpoint_hash
+		      AND prior.is_ai_analyzed = TRUE
+		      AND prior.method = fresh.method
+		      AND prior.status_code = fresh.status_code
+		      AND LOWER(COALESCE(prior.content_type,'')) = LOWER(COALESCE(fresh.content_type,''))
+		      AND prior.response_size = fresh.response_size
+		      AND COALESCE(prior.response_body_hash,'') = COALESCE(fresh.response_body_hash,'')
+		      AND prior.has_params = fresh.has_params
+		      AND prior.has_input = fresh.has_input
+		      AND prior.has_file_upload = fresh.has_file_upload
+		      AND prior.has_auth = fresh.has_auth
+		      AND prior.has_errors = fresh.has_errors
+		      AND prior.is_api = fresh.is_api
+		      AND prior.is_interstitial = fresh.is_interstitial
+		      AND COALESCE(prior.protection_fingerprint,'') = COALESCE(fresh.protection_fingerprint,'')
+		  )`, scanID)
+	if err != nil {
+		return 0, fmt.Errorf("acknowledge equivalent analyzed evidence: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 func scanTrafficRows(rows *sql.Rows) ([]types.TrafficEntry, error) {
 	var entries []types.TrafficEntry
 	for rows.Next() {

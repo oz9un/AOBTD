@@ -208,7 +208,14 @@ func CompleteBudgeted(ctx context.Context, provider Provider, budget *Budget, re
 	}
 	resp, err := provider.Complete(ctx, req)
 	if err != nil {
-		reservation.Release()
+		if usage, modelID, billed := UsageFromError(err); billed {
+			if modelID == "" {
+				modelID = provider.ModelInfo().Name
+			}
+			reservation.Commit(modelID, usage)
+		} else {
+			reservation.Release()
+		}
 		return nil, err
 	}
 	reservation.Commit(ResponseModel(resp, provider), resp.Usage)

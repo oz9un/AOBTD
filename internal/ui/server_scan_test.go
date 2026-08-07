@@ -503,6 +503,22 @@ func TestValidateRequestedScope(t *testing.T) {
 	if err := validateRequestedScope("https://*.example.com", true, nil); err == nil || !strings.Contains(err.Error(), "start URL") {
 		t.Fatalf("wildcard target error = %v", err)
 	}
+	if err := validateRequestedScope("http://127.0.0.1:4280", true, nil); err != nil {
+		t.Fatalf("IP literal should stay exact when Smart discovery is requested: %v", err)
+	}
+}
+
+func TestNormalizeScanStartTargetDisablesSmartDiscoveryForIPLiteral(t *testing.T) {
+	req := scanStartRequest{Target: "127.0.0.1:4280", IncludeSubdomains: true}
+	if err := normalizeScanStartTarget(&req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Target != "https://127.0.0.1:4280" {
+		t.Fatalf("target = %q", req.Target)
+	}
+	if req.IncludeSubdomains {
+		t.Fatal("IP literal retained Smart discovery")
+	}
 }
 
 func TestNormalizeScanStartTargetConvertsWildcardToSeedAndScope(t *testing.T) {
@@ -1098,9 +1114,21 @@ func TestResolveAndAppendTestingAuthority(t *testing.T) {
 	}
 }
 
-func TestUIReconAnalysisLimitIsAdaptiveAndAuthorityBound(t *testing.T) {
-	if got := appendUIReconAnalysisLimit([]string{"scan"}, policy.AuthorityActive, 3); !reflect.DeepEqual(got, []string{"scan"}) {
-		t.Fatalf("active scan received Recon analysis cap: %v", got)
+func TestUIScanAnalysisLimitIsAdaptiveAndKeepsActiveVerificationReachable(t *testing.T) {
+	for _, tt := range []struct {
+		authority policy.TestingAuthority
+		pages     int
+		want      string
+	}{
+		{authority: policy.AuthorityActive, pages: 3, want: "--analysis-endpoint-limit=8"},
+		{authority: policy.AuthorityActive, pages: 20, want: "--analysis-endpoint-limit=8"},
+		{authority: policy.AuthorityFullControl, pages: 100, want: "--analysis-endpoint-limit=8"},
+		{authority: policy.AuthorityActive, pages: 0, want: "--analysis-endpoint-limit=8"},
+	} {
+		got := appendUIScanAnalysisLimit([]string{"scan"}, tt.authority, tt.pages)
+		if len(got) != 2 || got[1] != tt.want {
+			t.Fatalf("authority=%s pages=%d args=%v, want %s", tt.authority, tt.pages, got, tt.want)
+		}
 	}
 	for _, tt := range []struct {
 		pages int
@@ -1111,10 +1139,22 @@ func TestUIReconAnalysisLimitIsAdaptiveAndAuthorityBound(t *testing.T) {
 		{pages: 100, want: "--analysis-endpoint-limit=32"},
 		{pages: 0, want: "--analysis-endpoint-limit=24"},
 	} {
-		got := appendUIReconAnalysisLimit([]string{"scan"}, policy.AuthorityRecon, tt.pages)
+		got := appendUIScanAnalysisLimit([]string{"scan"}, policy.AuthorityRecon, tt.pages)
 		if len(got) != 2 || got[1] != tt.want {
 			t.Fatalf("pages=%d args=%v, want %s", tt.pages, got, tt.want)
 		}
+	}
+}
+
+func TestUIAdaptiveBreadthAddsConvergenceWithoutChangingBoundedScans(t *testing.T) {
+	bounded := appendUIAdaptiveCrawlArgs([]string{"scan"}, 20)
+	if !reflect.DeepEqual(bounded, []string{"scan"}) {
+		t.Fatalf("bounded args = %v", bounded)
+	}
+	adaptive := appendUIAdaptiveCrawlArgs([]string{"scan"}, 0)
+	want := []string{"scan", "--adaptive-crawl", "--crawl-timeout=8m"}
+	if !reflect.DeepEqual(adaptive, want) {
+		t.Fatalf("adaptive args = %v, want %v", adaptive, want)
 	}
 }
 
@@ -1199,6 +1239,82 @@ func TestDefaultOpenAICompatibleBaseURLRoutesGLMToZAI(t *testing.T) {
 	}
 	if got := defaultOpenAICompatibleBaseURL("MiniMax-M2.7-highspeed"); got != "https://api.minimax.io/v1" {
 		t.Fatalf("MiniMax base URL = %q", got)
+	}
+}
+
+func TestScanAPIExposesActualIncompleteReason(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "scan-terminal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, err := db.CreateScan("https://example.test", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reason = `final convergence stopped: empty response content from model MiniMax-M3 (finish_reason="length")`
+	if _, err := db.Conn().Exec(`UPDATE scans SET status='incomplete' WHERE id=?`, scanID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertNarration(scanID, "orchestrator", "incomplete", reason, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(db, t.TempDir(), "127.0.0.1:0", nil)
+	w := httptest.NewRecorder()
+	s.handleScan(w, httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/scan?scan_id=%d", scanID), nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		TerminalDetail string `json:"terminal_detail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.TerminalDetail != reason {
+		t.Fatalf("terminal detail = %q, want %q", body.TerminalDetail, reason)
+	}
+}
+
+func TestScanAPIExposesStreamingPipelineAndConfiguredModel(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "scan-pipeline.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, err := db.CreateScan("https://example.test", `{"LLM":{"Provider":"openai-compatible","Model":"MiniMax-M3"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertNarration(scanID, "orchestrator", "phase", "Phase 1: Discovery — crawling the target.", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.InsertNarration(scanID, "orchestrator", "streaming_analysis_start", "warm-up complete", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer(db, t.TempDir(), "127.0.0.1:0", nil)
+	w := httptest.NewRecorder()
+	s.handleScan(w, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/scan?scan_id=%d", scanID), nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		LLMConfigured bool `json:"llm_configured"`
+		Pipeline      struct {
+			Phase         string `json:"phase"`
+			PhaseKey      string `json:"phase_key"`
+			AnalysisState string `json:"analysis_state"`
+		} `json:"pipeline"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.LLMConfigured || body.Pipeline.Phase != "Discovery + prioritized endpoint analysis" ||
+		body.Pipeline.PhaseKey != "discovery_analysis" || body.Pipeline.AnalysisState != "active" {
+		t.Fatalf("pipeline response = %+v", body)
 	}
 }
 
@@ -1355,13 +1471,37 @@ func TestLiveEndedStateUsesDesignedCTAButtons(t *testing.T) {
 	html := string(raw)
 	for _, want := range []string{
 		`.live-empty-state`,
+		`.live-terminal-banner`,
 		`class="live-empty-status ${statusClass}"`,
 		`Live browser stream is archived.`,
+		`cache.scan?.terminal_detail`,
+		`Why this run is incomplete`,
 		`class="live-empty-action primary"`,
 		`type="button" class="live-empty-action"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("Live ended UI missing %q", want)
+		}
+	}
+	if strings.Contains(html, "Scan incomplete — convergence limit reached") {
+		t.Fatal("Live ended UI still hardcodes an inaccurate convergence-limit explanation")
+	}
+}
+
+func TestAILogUISurfacesFailedModelCalls(t *testing.T) {
+	raw, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	for _, want := range []string{
+		`function aiLogIsModelCall(e)`,
+		`<div class="label">Failed Calls</div>`,
+		`provider/model failures`,
+		`hasMetrics ? 'unknown' : '-'`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("AI Log UI missing %q", want)
 		}
 	}
 }
@@ -1385,6 +1525,9 @@ func TestStatsCarriesLightweightNavigationCounts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.UpsertReconModel(scanID, `{"metrics":{"understanding_score":0.73,"targets_total":8}}`); err != nil {
+		t.Fatal(err)
+	}
 
 	s := NewServer(db, t.TempDir(), "127.0.0.1:0", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	w := httptest.NewRecorder()
@@ -1403,13 +1546,17 @@ func TestStatsCarriesLightweightNavigationCounts(t *testing.T) {
 	if response["graph_route_count"] != float64(1) {
 		t.Fatalf("canonical Graph route count=%v, want 1", response["graph_route_count"])
 	}
+	if response["recon_understanding_score"] != 0.73 || response["recon_targets_total"] != float64(8) {
+		t.Fatalf("live Recon stats=%v targets=%v, want 0.73/8",
+			response["recon_understanding_score"], response["recon_targets_total"])
+	}
 
 	raw, err := staticFiles.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(raw)
-	for _, want := range []string{"stats?.narration_count", "stats?.strategy_count", "stats?.changes_count", "stats?.ai_log_count"} {
+	for _, want := range []string{"stats?.narration_count", "stats?.strategy_count", "stats?.changes_count", "stats?.ai_log_count", "stats?.recon_understanding_score"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("navigation badge does not use %q", want)
 		}
@@ -1417,10 +1564,14 @@ func TestStatsCarriesLightweightNavigationCounts(t *testing.T) {
 	for _, want := range []string{
 		"refreshAll({runningView: true})",
 		"live: ['scan','stats','endpoints','findings','aiStats']",
-		"recon: ['scan','stats','endpoints','profiles','understanding','aiStats']",
+		"recon: ['scan','stats','endpoints','profiles','surface','understanding','aiStats']",
+		"findings: ['scan','stats','endpoints','findings','surface']",
 		"Number.isFinite(stats?.graph_route_count)",
+		"freshView: nextView, repaint: true",
+		"byView[opts.freshView || currentView]",
+		"typeof stats?.recon_understanding_score === 'number'",
 		"let refreshAllInFlight = null",
-		"if (refreshAllInFlight && !opts.force) return refreshAllInFlight",
+		"if (refreshAllInFlight && !opts.force && !opts.freshView) return refreshAllInFlight",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("view-specific refresh contract missing %q", want)

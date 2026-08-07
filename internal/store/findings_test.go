@@ -271,6 +271,54 @@ func TestInsertFindingMergesIDORCollectionAndItemEndpoint(t *testing.T) {
 	}
 }
 
+func TestInsertFindingMergesRecoveredObjectAccessAndJWTValidationRootCauses(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "findings-root-cause.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, err := db.CreateScan("https://example.test", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id1, err := db.InsertFinding(scanID, types.Finding{
+		Title:    "Malformed object ID recovered into accessible endpoint",
+		Severity: types.SeverityHigh, Confidence: types.ConfidenceConfirmed,
+		EndpointID: "GET /rest/basket/6", VulnType: "broken_object_access_recovered_id",
+		Evidence: "basket 6 returned another owner's object",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := db.InsertFinding(scanID, types.Finding{
+		Title:    "IDOR confirmed on /rest/basket/{id}",
+		Severity: types.SeverityHigh, Confidence: types.ConfidenceConfirmed,
+		EndpointID: "GET /rest/basket/{id}", VulnType: "idor",
+		Evidence: "adjacent basket returned distinct owner data",
+	})
+	if err != nil || id2 != id1 {
+		t.Fatalf("IDOR root cause did not merge: ids=%d/%d err=%v", id1, id2, err)
+	}
+
+	jwt1, err := db.InsertFinding(scanID, types.Finding{
+		Title:    "JWT alg=none accepted at /rest/user/whoami",
+		Severity: types.SeverityCritical, Confidence: types.ConfidenceConfirmed,
+		EndpointID: "GET /rest/user/whoami", VulnType: "jwt_unsigned",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt2, err := db.InsertFinding(scanID, types.Finding{
+		Title:    "JWT alg:none accepted at /rest/user/authentication-details",
+		Severity: types.SeverityCritical, Confidence: types.ConfidenceConfirmed,
+		EndpointID: "GET /rest/user/authentication-details", VulnType: "jwt_unsigned",
+	})
+	if err != nil || jwt2 != jwt1 {
+		t.Fatalf("JWT verifier root cause did not merge: ids=%d/%d err=%v", jwt1, jwt2, err)
+	}
+}
+
 func TestInsertFindingMergesQueryParamFromEndpoint(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "findings.db"))
 	if err != nil {

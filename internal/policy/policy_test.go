@@ -114,6 +114,41 @@ func TestMethodClassCannotBeDowngraded(t *testing.T) {
 	}
 }
 
+func TestCredentialMutationRoutesRequireFullControl(t *testing.T) {
+	const origin = "http://juice-shop.test:3000"
+	const juiceShopChange = origin + "/rest/user/change-password?current=admin123&new=admin1234&repeat=admin1234"
+
+	active := mustEngine(t, AuthorityActive, origin)
+	denied := active.Authorize(Action{TargetURL: juiceShopChange, Method: "GET"})
+	if denied.Allowed || denied.Code != CodeAuthorityDenied ||
+		len(denied.Classes) != 1 || denied.Classes[0] != ActionDestructive {
+		t.Fatalf("active password-change decision = %+v, want destructive authority denial", denied)
+	}
+
+	full := mustEngine(t, AuthorityFullControl, origin)
+	allowed := full.Authorize(Action{TargetURL: juiceShopChange, Method: "GET"})
+	if !allowed.Allowed || len(allowed.Classes) != 1 || allowed.Classes[0] != ActionDestructive {
+		t.Fatalf("full-control password-change decision = %+v, want allowed destructive action", allowed)
+	}
+
+	reset := active.Authorize(Action{
+		TargetURL: origin + "/api/user/reset-password",
+		Method:    "POST",
+	})
+	if reset.Allowed || reset.Code != CodeAuthorityDenied ||
+		len(reset.Classes) != 1 || reset.Classes[0] != ActionDestructive {
+		t.Fatalf("active password-reset decision = %+v, want destructive authority denial", reset)
+	}
+
+	navigation := active.Authorize(Action{
+		TargetURL: origin + "/#/forgot-password",
+		Method:    "GET",
+	})
+	if !navigation.Allowed || len(navigation.Classes) != 1 || navigation.Classes[0] != ActionReadOnlyActive {
+		t.Fatalf("forgot-password UI navigation decision = %+v, want allowed read-only action", navigation)
+	}
+}
+
 func TestAuthorizeRejectsUnclassifiedAndInventedActions(t *testing.T) {
 	engine := mustEngine(t, AuthorityFullControl, "https://app.test")
 	tests := []struct {

@@ -14,6 +14,7 @@ Output: a table of
   - false positives (findings that don't map to any challenge)
 """
 import json
+import argparse
 import sqlite3
 import sys
 import re
@@ -207,8 +208,17 @@ def match_text_to_challenges(text):
     return matched
 
 
-def main():
-    scan_id = int(sys.argv[1]) if len(sys.argv) > 1 else latest_scan_id()
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Estimate OWASP Juice Shop challenge coverage for an AOBTD scan."
+    )
+    parser.add_argument("scan_id", nargs="?", type=int, help="Scan id (default: latest scan)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    scan_id = args.scan_id if args.scan_id is not None else latest_scan_id()
     if scan_id is None:
         print("No scans in DB")
         return 1

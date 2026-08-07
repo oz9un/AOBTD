@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -30,6 +31,7 @@ import (
 	"github.com/ozzyw/aobtd/internal/corpus"
 	"github.com/ozzyw/aobtd/internal/discovery"
 	"github.com/ozzyw/aobtd/internal/extract"
+	"github.com/ozzyw/aobtd/internal/oast"
 	"github.com/ozzyw/aobtd/internal/policy"
 	"github.com/ozzyw/aobtd/internal/reasoner"
 	"github.com/ozzyw/aobtd/internal/redact"
@@ -40,13 +42,14 @@ import (
 // VerifierAgent takes issues flagged by the analyzer and actually tests them.
 // It sends real requests with payloads to confirm or dismiss findings.
 type VerifierAgent struct {
-	db        *store.DB
-	scanID    int64
-	logger    *slog.Logger
-	client    *http.Client
-	browser   *browser.Controller
-	target    string
-	authority policy.TestingAuthority
+	db         *store.DB
+	scanID     int64
+	logger     *slog.Logger
+	client     *http.Client
+	browser    *browser.Controller
+	target     string
+	authority  policy.TestingAuthority
+	oastClient *oast.Client
 
 	// learnedAuthHeaders stores same-origin credentials obtained during
 	// verification itself (for example, a token returned by a confirmed login
@@ -63,6 +66,8 @@ type VerifierAgent struct {
 	tested    int
 	confirmed int
 	dismissed int
+
+	ssrfAttempted map[string]bool
 }
 
 // NewVerifierAgent creates a verifier agent.
@@ -81,7 +86,7 @@ func NewVerifierAgent(db *store.DB, scanID int64, executionPolicy *policy.Engine
 			return nil
 		},
 	}
-	return &VerifierAgent{
+	verifier := &VerifierAgent{
 		db:        db,
 		scanID:    scanID,
 		logger:    logger,
@@ -93,12 +98,26 @@ func NewVerifierAgent(db *store.DB, scanID int64, executionPolicy *policy.Engine
 			Audit:            audit,
 		}),
 	}
+	oastClient, err := oast.FromEnv()
+	if err != nil {
+		logger.Warn("verifier: OAST configuration disabled", "error", err)
+	} else {
+		verifier.oastClient = oastClient
+	}
+	return verifier
 }
 
 func (v *VerifierAgent) Name() string { return "verifier" }
 
 func (v *VerifierAgent) SetBrowser(ctrl *browser.Controller) {
 	v.browser = ctrl
+}
+
+// SetOASTClient overrides environment-derived OAST configuration. It exists so
+// integration tests can use an isolated callback service without process-wide
+// secrets.
+func (v *VerifierAgent) SetOASTClient(client *oast.Client) {
+	v.oastClient = client
 }
 
 // Start runs verification on all flagged issues.
@@ -160,6 +179,9 @@ func (v *VerifierAgent) Start(ctx context.Context) error {
 			v.verifyIssue(ctx, profile, entries[0], issue)
 		}
 	}
+	if v.proactive {
+		v.probeObservedSSRFCandidates(ctx, profiles)
+	}
 
 	v.logger.Info("verifier complete",
 		"tested", v.tested,
@@ -198,6 +220,10 @@ func (v *VerifierAgent) verifyIssue(ctx context.Context, profile types.PageProfi
 		strings.Contains(issueLower, "redirect to arbitrary") ||
 		strings.Contains(issueLower, "redirects to arbitrary"):
 		v.verifyOpenRedirect(ctx, profile, entry, issue)
+	case strings.Contains(issueLower, "ssrf") ||
+		strings.Contains(issueLower, "server-side request forgery") ||
+		strings.Contains(issueLower, "server side request forgery"):
+		v.verifySSRF(ctx, profile, entry, issue)
 	case strings.Contains(issueLower, "ldap"):
 		v.probeLDAPInjection(ctx, v.resolveTargetBase())
 	case strings.Contains(issueLower, "sql") ||
@@ -410,6 +436,298 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+// ── HTTP OAST / SSRF Verification ──
+
+const ssrfOASTWait = 12 * time.Second
+
+type ssrfProbeTarget struct {
+	profile types.PageProfile
+	entry   types.TrafficEntry
+	param   string
+	source  string
+}
+
+type ssrfProbeResult struct {
+	ssrfProbeTarget
+	token       string
+	callbackURL string
+	started     time.Time
+	status      int
+	body        string
+	event       *oast.Event
+	err         error
+	inBand      bool
+}
+
+func (v *VerifierAgent) verifySSRF(ctx context.Context, profile types.PageProfile, entry types.TrafficEntry, issue string) {
+	if v.oastClient == nil {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "unverified — SSRF-shaped issue found, but HTTP OAST is not configured",
+			Description: "The analyzer identified a possible server-side URL fetch. Configure AOBTD_OAST_BASE_URL, AOBTD_OAST_API_TOKEN, and AOBTD_OAST_SIGNING_KEY to require a correlated callback before confirmation.",
+			VulnType:    "ssrf",
+		})
+		return
+	}
+
+	params := make([]string, 0, 4)
+	if param := extractParamFromIssue(issue); param != "" {
+		params = append(params, param)
+	}
+	params = append(params, ssrfCandidateParams(profile, entry)...)
+	params = ssrfUniqueStrings(params)
+	if len(params) == 0 {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "unverified — SSRF issue did not identify a mutable URL parameter",
+			Description: "The issue may involve a URL embedded in a path, header, or nested body value that the current HTTP OAST probe cannot mutate safely.",
+			VulnType:    "ssrf",
+		})
+		return
+	}
+
+	attempted := false
+	for _, param := range params {
+		result := v.startSSRFProbe(ctx, ssrfProbeTarget{
+			profile: profile, entry: entry, param: param, source: "analyzer issue: " + issue,
+		})
+		if result == nil {
+			continue
+		}
+		attempted = true
+		if !result.inBand && result.err == nil {
+			result.event, result.err = v.oastClient.WaitForEvent(ctx, result.token, result.started, ssrfOASTWait)
+		}
+		if result.inBand || result.event != nil {
+			v.storeConfirmedSSRFFinding(result)
+			return
+		}
+	}
+	if attempted {
+		v.storeFinding(profile, types.Finding{
+			Title:       issue,
+			Severity:    types.SeverityInfo,
+			Confidence:  types.ConfidencePossible,
+			Evidence:    "HTTP OAST payload sent; no correlated callback or in-band canary was observed during the bounded verification window",
+			Description: "The SSRF hypothesis remains unconfirmed. A missing callback can also mean asynchronous processing, DNS-only behavior, or blocked outbound HTTP, so it is not treated as a dismissal.",
+			VulnType:    "ssrf",
+		})
+	}
+}
+
+// probeObservedSSRFCandidates exercises concrete URL-shaped inputs even when
+// the analyzer did not phrase them as an issue. Requests are sent first and
+// callbacks are awaited concurrently so a batch costs one bounded OAST window.
+func (v *VerifierAgent) probeObservedSSRFCandidates(ctx context.Context, profiles []types.PageProfile) {
+	if v.oastClient == nil {
+		return
+	}
+	const maxCandidates = 12
+	results := make([]*ssrfProbeResult, 0, maxCandidates)
+	for _, profile := range profiles {
+		if ctx.Err() != nil || len(results) >= maxCandidates || profile.ID == "attack_surface" {
+			break
+		}
+		entries := v.findTrafficForProfile(profile)
+		if len(entries) == 0 || ssrfTelemetryLikePath(entries[0].Request.Path) {
+			continue
+		}
+		params := ssrfCandidateParams(profile, entries[0])
+		if len(params) == 0 {
+			continue
+		}
+		result := v.startSSRFProbe(ctx, ssrfProbeTarget{
+			profile: profile, entry: entries[0], param: params[0], source: "observed URL-shaped input",
+		})
+		if result != nil {
+			results = append(results, result)
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+
+	v.db.InsertNarration(v.scanID, "verifier", "attempt",
+		fmt.Sprintf("Sent %d signed HTTP OAST probe(s) to observed URL-fetch candidates; waiting once for correlated callbacks.", len(results)),
+		"", nil)
+	var wg sync.WaitGroup
+	for _, result := range results {
+		if result.inBand || result.err != nil {
+			continue
+		}
+		wg.Add(1)
+		go func(result *ssrfProbeResult) {
+			defer wg.Done()
+			result.event, result.err = v.oastClient.WaitForEvent(ctx, result.token, result.started, ssrfOASTWait)
+		}(result)
+	}
+	wg.Wait()
+	for _, result := range results {
+		if result.inBand || result.event != nil {
+			v.storeConfirmedSSRFFinding(result)
+		}
+	}
+}
+
+func (v *VerifierAgent) startSSRFProbe(ctx context.Context, target ssrfProbeTarget) *ssrfProbeResult {
+	key := target.profile.ID + "|" + strings.ToLower(target.param)
+	if v.ssrfAttempted == nil {
+		v.ssrfAttempted = make(map[string]bool)
+	}
+	if v.ssrfAttempted[key] {
+		return nil
+	}
+	v.ssrfAttempted[key] = true
+
+	token, callbackURL, err := v.oastClient.NewProbe()
+	if err != nil {
+		v.logger.Warn("verifier: create OAST probe", "error", err)
+		return nil
+	}
+	result := &ssrfProbeResult{
+		ssrfProbeTarget: target,
+		token:           token, callbackURL: callbackURL, started: time.Now().Add(-time.Second),
+	}
+	method := strings.ToUpper(strings.TrimSpace(target.entry.Request.Method))
+	var resp *http.Response
+	if method == "" || method == http.MethodGet {
+		resp, result.body, result.err = v.sendGETWithParam(ctx, target.entry.Request.URL, target.param, callbackURL, target.entry.Request.Headers)
+	} else if method == http.MethodPost {
+		resp, result.body, result.err = v.sendPOSTWithParam(ctx, target.entry.Request.URL, target.param, callbackURL, target.entry.Request.Headers, target.entry.Request.Body)
+	} else {
+		return nil
+	}
+	v.tested++
+	if resp != nil {
+		result.status = resp.StatusCode
+	}
+	result.inBand = strings.Contains(result.body, "AOBTD_OAST_PROOF:"+token)
+	v.db.InsertNarration(v.scanID, "verifier", "attempt",
+		fmt.Sprintf("Testing %s parameter %q with a signed HTTP OAST callback URL.", target.profile.ID, target.param),
+		target.entry.Request.URL, map[string]any{"param": target.param, "callback_url": callbackURL})
+	return result
+}
+
+func (v *VerifierAgent) storeConfirmedSSRFFinding(result *ssrfProbeResult) {
+	v.confirmed++
+	method := strings.ToUpper(strings.TrimSpace(result.entry.Request.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	path := result.entry.Request.Path
+	if path == "" {
+		path = csrfEndpointPath(result.entry.Request.URL)
+	}
+	proofKind := "target response contained the callback service's unique canary"
+	callbackEvidence := "In-band canary returned through the target response"
+	if result.event != nil {
+		proofKind = "the callback service received a token-correlated HTTP request"
+		callbackEvidence = fmt.Sprintf("Callback: %s %s\nReceived at: %s\nSource IP: %s\nCloudflare colo: %s",
+			result.event.Method, result.event.Path,
+			time.UnixMilli(result.event.ReceivedAtMS).UTC().Format(time.RFC3339Nano),
+			result.event.SourceIP, result.event.Colo)
+	}
+	pocRequest := buildXSSRequest(method, result.entry.Request.URL, result.param, result.callbackURL, result.entry.Request.Headers, result.entry.Request.Body)
+	pocResponse := fmt.Sprintf("Target response status: %d\n%s", result.status, callbackEvidence)
+	evidence := fmt.Sprintf("Parameter: %s\nPayload: %s\nProof: %s\n%s\nSource: %s",
+		result.param, result.callbackURL, proofKind, callbackEvidence, result.source)
+	v.storeFinding(result.profile, types.Finding{
+		Title:       fmt.Sprintf("Server-Side Request Forgery via %q", result.param),
+		Description: fmt.Sprintf("The %s %s endpoint accepted an operator-controlled URL in %q and caused a request correlated by a unique AOBTD OAST token; %s.", method, path, result.param, proofKind),
+		Severity:    types.SeverityHigh,
+		Confidence:  types.ConfidenceConfirmed,
+		VulnType:    "ssrf",
+		ParamName:   result.param,
+		Payload:     result.callbackURL,
+		PocRequest:  pocRequest,
+		PocResponse: pocResponse,
+		StepsToReproduce: fmt.Sprintf("1. Generate a fresh signed callback URL.\n2. Send %s %s with `%s=%s`.\n3. Observe the unique canary in the target response or poll the callback service for the matching token.\n4. Confirm the callback timestamp occurs after the probe request.",
+			method, path, result.param, result.callbackURL),
+		Impact:      "An attacker can make the application server initiate network requests to attacker-controlled destinations. Depending on egress and destination controls, this can expose internal services, cloud metadata, or trusted network resources.",
+		Remediation: "Do not fetch arbitrary user-supplied URLs. Resolve destinations server-side against a strict scheme/host/port allowlist, reject private/link-local/reserved IP ranges after every DNS resolution and redirect, and apply outbound network egress controls.",
+		Evidence:    evidence,
+		TrafficIDs: func() []int64 {
+			if result.entry.ID > 0 {
+				return []int64{result.entry.ID}
+			}
+			return nil
+		}(),
+	})
+	v.db.InsertNarration(v.scanID, "verifier", "confirmed",
+		fmt.Sprintf("SSRF confirmed on %s parameter %q with a correlated HTTP OAST proof.", result.profile.ID, result.param),
+		result.entry.Request.URL, map[string]any{"param": result.param, "callback_url": result.callbackURL})
+}
+
+func ssrfCandidateParams(profile types.PageProfile, entry types.TrafficEntry) []string {
+	params := make([]string, 0, 8)
+	for _, input := range append(append([]types.Input{}, profile.Inputs...), profile.ExtractedInputs...) {
+		if looksLikeSSRFParam(input.Name) || strings.Contains(strings.ToLower(input.Explanation), "ssrf") {
+			params = append(params, input.Name)
+		}
+	}
+	if parsed, err := url.Parse(entry.Request.URL); err == nil {
+		for name, values := range parsed.Query() {
+			if looksLikeSSRFParam(name) || valuesContainAbsoluteURL(values) {
+				params = append(params, name)
+			}
+		}
+	}
+	return ssrfUniqueStrings(params)
+}
+
+func looksLikeSSRFParam(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if idx := strings.LastIndexAny(name, ".[]"); idx >= 0 && idx+1 < len(name) {
+		name = name[idx+1:]
+	}
+	name = strings.ReplaceAll(name, "-", "_")
+	switch name {
+	case "url", "uri", "target", "destination", "dest", "feed", "endpoint", "webhook", "callback_url", "image_url", "avatar_url", "source_url", "fetch_url", "remote_url":
+		return true
+	default:
+		return strings.HasSuffix(name, "_url") || strings.HasSuffix(name, "_uri")
+	}
+}
+
+func valuesContainAbsoluteURL(values []string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(strings.TrimSpace(value))
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+			return true
+		}
+	}
+	return false
+}
+
+func ssrfTelemetryLikePath(path string) bool {
+	path = strings.ToLower(path)
+	for _, marker := range []string{"/rum", "/telemetry", "/analytics", "/metrics/collect", "/ces/v1/"} {
+		if strings.Contains(path, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func ssrfUniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := values[:0]
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		key := strings.ToLower(value)
+		if value == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, value)
+	}
+	return result
+}
+
 // ── XSS Verification ──
 
 var xssPayloads = []struct {
@@ -440,6 +758,27 @@ type browserXSSRenderTarget struct {
 	baseURL string
 	param   string
 	source  string
+}
+
+func browserXSSProofPath(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "/"
+	}
+	if fragmentPath, _, _ := strings.Cut(parsed.Fragment, "?"); strings.HasPrefix(fragmentPath, "/") {
+		basePath := strings.TrimRight(parsed.Path, "/")
+		if basePath == "" {
+			basePath = "/"
+		}
+		if basePath == "/" {
+			return "/#" + fragmentPath
+		}
+		return basePath + "/#" + fragmentPath
+	}
+	if parsed.Path == "" {
+		return "/"
+	}
+	return parsed.Path
 }
 
 func browserXSSPayloads(marker string) []browserXSSPayload {
@@ -594,10 +933,16 @@ func (v *VerifierAgent) verifyXSS(ctx context.Context, profile types.PageProfile
 				"In addition, serve a strict Content-Security-Policy that disallows inline scripts."
 
 			v.storeFinding(profile, types.Finding{
-				Title:            title,
-				Description:      description,
-				Severity:         types.SeverityHigh,
-				Confidence:       types.ConfidenceConfirmed,
+				Title:       title,
+				Description: description,
+				Severity:    types.SeverityHigh,
+				Confidence:  types.ConfidenceConfirmed,
+				EndpointID: func() string {
+					if browserConfirmed {
+						return "GET " + browserXSSProofPath(browserProof.URL)
+					}
+					return profile.ID
+				}(),
 				VulnType:         vulnType,
 				ParamName:        paramName,
 				Payload:          p.payload,
@@ -1785,6 +2130,11 @@ func (v *VerifierAgent) runProactiveProbes(ctx context.Context) {
 	}
 	notificationPage, closeNotificationPage := v.openBrowserNotificationListener(ctx, target)
 	defer closeNotificationPage()
+
+	// Promote proof that earlier Explorer/follow-up traffic already captured.
+	// This is cheap and avoids losing a strong source-disclosure receipt when
+	// later LLM-heavy phases run close to their token budget.
+	v.probeObservedFileInclusionSourceDisclosures(ctx)
 
 	// WebGoat is a training benchmark whose proof signal is returned by a few
 	// lesson endpoints only after exact request shapes. Run a tiny,
@@ -4465,32 +4815,13 @@ func (v *VerifierAgent) probeEncodedMediaAssetRecovery(ctx context.Context, targ
 			v.dismissed++
 			continue
 		}
-		v.confirmed++
-		v.storeEncodedMediaAssetFinding(rawPath, encodedPath, u, resp.StatusCode, resp.Header.Get("Content-Type"), len(body))
-		v.db.InsertNarration(v.scanID, "verifier", "confirmed",
-			fmt.Sprintf("Recovered media asset %s by percent-encoding fragment-reserved filename characters.", encodedPath),
-			u, nil)
+		// Correct URL encoding recovered an advertised public asset. This is a
+		// useful crawl observation, not a security vulnerability.
+		v.db.InsertNarration(v.scanID, "verifier", "observation",
+			fmt.Sprintf("Recovered advertised public media asset %s by applying normal path-segment URL encoding; no finding created.", encodedPath),
+			u, map[string]any{"raw_path": rawPath, "encoded_path": encodedPath, "content_type": resp.Header.Get("Content-Type"), "body_length": len(body)})
 		return
 	}
-}
-
-func (v *VerifierAgent) storeEncodedMediaAssetFinding(rawPath, encodedPath, rawURL string, status int, contentType string, bodyLen int) {
-	profile := types.PageProfile{ID: "GET " + encodedPath, URL: rawURL, Method: "GET"}
-	v.storeFinding(profile, types.Finding{
-		Title:            fmt.Sprintf("Public media asset requires safe URL encoding: %s", encodedPath),
-		Description:      fmt.Sprintf("An observed JSON/API response advertised media path %q. Because the filename contains URL-fragment-reserved characters, a browser may request only the truncated prefix. Re-requesting the same path with path segments percent-encoded (%s) returned a real media response.", rawPath, encodedPath),
-		Severity:         types.SeverityInfo,
-		Confidence:       types.ConfidenceConfirmed,
-		EndpointID:       "GET " + encodedPath,
-		VulnType:         "info_disclosure",
-		Payload:          "(URL path percent-encoding)",
-		PocRequest:       fmt.Sprintf("GET %s HTTP/1.1\nHost: <target>\n", encodedPath),
-		PocResponse:      fmt.Sprintf("HTTP/1.1 %d\nContent-Type: %s\nContent-Length: %d\n\n(binary media body omitted)", status, contentType, bodyLen),
-		StepsToReproduce: fmt.Sprintf("1. Observe the media path %q in an API/JSON response.\n2. Percent-encode the path segments so reserved characters such as # become %%23.\n3. GET %s unauthenticated.\n4. Observe that the server returns media content.", rawPath, encodedPath),
-		Impact:           "URLs embedded in JSON or HTML that are not safely encoded can hide public media/assets from normal browser navigation while still allowing direct retrieval by attackers who canonicalize the path correctly.",
-		Remediation:      "When serializing public asset URLs, percent-encode each path segment before embedding it in HTML/JSON. Avoid raw reserved characters in filenames served over HTTP.",
-		Evidence:         fmt.Sprintf("Raw path: %s\nEncoded path: %s\nURL: %s\nStatus: %d\nContent-Type: %s\nBody length: %d", rawPath, encodedPath, rawURL, status, contentType, bodyLen),
-	})
 }
 
 func encodedMediaPathCandidatesFromTraffic(entries []types.TrafficEntry, limit int) []string {
@@ -4650,9 +4981,8 @@ func (v *VerifierAgent) probeStaticDisclosureFeedbackReports(ctx context.Context
 			v.dismissed++
 			continue
 		}
-		v.confirmed++
 		submitted = append(submitted, report)
-		v.db.InsertNarration(v.scanID, "verifier", "confirmed",
+		v.db.InsertNarration(v.scanID, "verifier", "workflow_complete",
 			fmt.Sprintf("Submitted security report feedback for %s (%s).", report.Kind, report.Comment),
 			strings.TrimRight(target, "/")+"/api/Feedbacks/", map[string]any{
 				"status":  status,
@@ -4661,9 +4991,9 @@ func (v *VerifierAgent) probeStaticDisclosureFeedbackReports(ctx context.Context
 				"body":    truncateString(body, 240),
 			})
 	}
-	if len(submitted) > 0 {
-		v.storeStaticDisclosureFeedbackReportFinding(target, submitted)
-	}
+	// Successful disclosure submission is operator workflow telemetry. The
+	// underlying exposed artifact/dependency may be a finding; the fact that a
+	// feedback form accepted a report is not.
 }
 
 func (v *VerifierAgent) staticDisclosureFeedbackReports(ctx context.Context, target string) []staticDisclosureFeedbackReport {
@@ -4835,36 +5165,6 @@ func (v *VerifierAgent) submitFeedbackComment(ctx context.Context, target, comme
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	ok = resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated
 	return resp.StatusCode, string(respBody), ok
-}
-
-func (v *VerifierAgent) storeStaticDisclosureFeedbackReportFinding(target string, reports []staticDisclosureFeedbackReport) {
-	if len(reports) == 0 {
-		return
-	}
-	var comments []string
-	var sources []string
-	for _, report := range reports {
-		comments = append(comments, fmt.Sprintf("%s (%s)", report.Comment, report.Kind))
-		sources = append(sources, fmt.Sprintf("%s: %s", report.Source, report.Signal))
-	}
-	path := "/api/Feedbacks/"
-	rawURL := strings.TrimRight(target, "/") + path
-	profile := types.PageProfile{ID: "POST " + path, URL: rawURL, Method: http.MethodPost}
-	v.storeFinding(profile, types.Finding{
-		Title:            "Security disclosure details accepted through feedback workflow",
-		Description:      fmt.Sprintf("The verifier derived %d reportable security disclosure(s) from public static/package artifacts and submitted them through the application feedback workflow: %s.", len(reports), strings.Join(comments, "; ")),
-		Severity:         types.SeverityInfo,
-		Confidence:       types.ConfidenceConfirmed,
-		EndpointID:       "POST " + path,
-		VulnType:         "security_report_submitted",
-		Payload:          strings.Join(comments, "; "),
-		PocRequest:       fmt.Sprintf("POST %s HTTP/1.1\nHost: <target>\nContent-Type: application/json\n\n{\"comment\":\"%s\", \"captchaId\":\"<from /rest/captcha/>\", \"captcha\":\"<answer>\"}", path, reports[0].Comment),
-		PocResponse:      "HTTP/1.1 201\n\nFeedback item created",
-		StepsToReproduce: fmt.Sprintf("1. Retrieve exposed package/static artifact(s).\n2. Derive reportable disclosure strings: %s.\n3. GET /rest/captcha/ and use the leaked answer.\n4. POST each disclosure as feedback/comment text to %s.", strings.Join(firstNStrings(comments, 4), ", "), path),
-		Impact:           "Public artifacts disclose actionable vulnerability intelligence that can be reported or abused: vulnerable dependency pins, dubious crypto dependencies, and typo-squatted package names.",
-		Remediation:      "Remove build manifests/backups from the web root, upgrade vulnerable dependencies, remove unused crypto-adjacent packages, and review package names for typosquatting/supply-chain risk.",
-		Evidence:         fmt.Sprintf("Submitted comments: %s\nSources: %s", strings.Join(comments, "; "), strings.Join(sources, "; ")),
-	})
 }
 
 func canonicalArtifactSignalPath(path string) string {
@@ -5154,6 +5454,7 @@ func looksLikeLocalizationLabelBundle(value any) bool {
 	stringValues := 0
 	labelLikeKeys := 0
 	sentenceLikeValues := 0
+	languageMarker := false
 	for key, child := range obj {
 		s, ok := child.(string)
 		if !ok {
@@ -5161,7 +5462,12 @@ func looksLikeLocalizationLabelBundle(value any) bool {
 		}
 		stringValues++
 		lowerKey := strings.ToLower(strings.TrimSpace(key))
-		if strings.Contains(lowerKey, ".") || strings.Contains(lowerKey, "-") {
+		upperKey := strings.ToUpper(strings.TrimSpace(key))
+		if upperKey == "LANGUAGE" {
+			languageMarker = true
+		}
+		if strings.Contains(lowerKey, ".") || strings.Contains(lowerKey, "-") ||
+			(upperKey == key && strings.Contains(key, "_")) {
 			labelLikeKeys++
 		}
 		trimmed := strings.TrimSpace(s)
@@ -5172,7 +5478,8 @@ func looksLikeLocalizationLabelBundle(value any) bool {
 	if stringValues*100 < len(obj)*85 {
 		return false
 	}
-	return labelLikeKeys >= 3 && sentenceLikeValues >= 5
+	return languageMarker && labelLikeKeys >= 3 && sentenceLikeValues >= 3 ||
+		labelLikeKeys >= 3 && sentenceLikeValues >= 5
 }
 
 func collectAPIExposureFacts(value any, facts *apiExposureFacts) {
@@ -6186,6 +6493,7 @@ func (v *VerifierAgent) probeBrowserRenderedXSS(ctx context.Context, target stri
 		}
 	}
 
+	confirmedProofs := make(map[string]bool)
 	for _, rt := range targets {
 		if ctx.Err() != nil {
 			return
@@ -6200,20 +6508,25 @@ func (v *VerifierAgent) probeBrowserRenderedXSS(ctx context.Context, target stri
 			v.dismissed++
 			continue
 		}
-		v.confirmed++
-		path := rt.baseURL
-		if parsed, err := url.Parse(rt.baseURL); err == nil {
-			path = parsed.Path
-			if path == "" {
-				path = "/"
-			}
+		proofPath := browserXSSProofPath(proof.URL)
+		proofKey := strings.ToLower(proofPath + "\x00" + rt.param)
+		if confirmedProofs[proofKey] {
+			v.dismissed++
+			v.db.InsertNarration(v.scanID, "verifier", "duplicate_proof",
+				fmt.Sprintf("Suppressed duplicate browser-XSS attribution from %s; execution was already proven at %s.",
+					rt.baseURL, proofPath),
+				proof.URL, map[string]any{"source_url": rt.baseURL, "proof_path": proofPath, "param": rt.param})
+			continue
 		}
+		confirmedProofs[proofKey] = true
+		v.confirmed++
+		path := proofPath
 		profile := types.PageProfile{ID: "GET " + path, URL: proof.URL, Method: "GET"}
 		v.storeFinding(profile, types.Finding{
 			Title: fmt.Sprintf("Browser-executed XSS in '%s' parameter", rt.param),
 			Description: fmt.Sprintf(
-				"The '%s' parameter reaches a browser-rendered sink. The verifier opened candidate UI/API render URLs in headless Chrome and observed JavaScript execution via %s. Source: %s.",
-				rt.param, proof.Signal, rt.source),
+				"The '%s' parameter reaches a browser-rendered sink at %s. The verifier observed JavaScript execution via %s. The original lead was %s (%s); attribution follows the page that actually executed the payload.",
+				rt.param, path, proof.Signal, rt.baseURL, rt.source),
 			Severity:         types.SeverityHigh,
 			Confidence:       types.ConfidenceConfirmed,
 			EndpointID:       "GET " + path,
@@ -6226,8 +6539,8 @@ func (v *VerifierAgent) probeBrowserRenderedXSS(ctx context.Context, target stri
 			Impact: "A victim following a crafted link can execute attacker-controlled JavaScript under the target origin. " +
 				"Impact includes credential theft, session actions, account takeover chains, and phishing overlays.",
 			Remediation: "Do not render query parameters or API-returned user content with unsafe HTML trust. Contextually encode on output and enforce a strict CSP.",
-			Evidence: fmt.Sprintf("Candidate URL: %s\nSource: %s\nPayload kind: %s\nPayload: %s\nSignal: %s\nAlert: %s",
-				proof.URL, rt.source, proof.Kind, proof.Payload, proof.Signal, proof.AlertMessage),
+			Evidence: fmt.Sprintf("Proof URL: %s\nProof endpoint: %s\nOriginal lead: %s\nSource: %s\nPayload kind: %s\nPayload: %s\nSignal: %s\nAlert: %s",
+				proof.URL, path, rt.baseURL, rt.source, proof.Kind, proof.Payload, proof.Signal, proof.AlertMessage),
 		})
 		v.db.InsertNarration(v.scanID, "verifier", "confirmed",
 			fmt.Sprintf("Browser-rendered XSS confirmed for %s?%s= via %s.",
@@ -6254,14 +6567,16 @@ func (v *VerifierAgent) probeBrowserIframeHTMLInjection(ctx context.Context, tar
 				v.dismissed++
 				continue
 			}
-			v.confirmed++
-			path := rt.baseURL
-			if parsed, err := url.Parse(rt.baseURL); err == nil {
-				path = parsed.Path
-				if path == "" {
-					path = "/"
-				}
+			path := browserXSSProofPath(candidate)
+			if v.confirmedBrowserXSSExists(path, rt.param) {
+				v.dismissed++
+				v.db.InsertNarration(v.scanID, "verifier", "duplicate_proof",
+					fmt.Sprintf("Suppressed weaker HTML-injection finding at %s because browser-executed XSS is already confirmed for parameter %q.",
+						path, rt.param),
+					candidate, map[string]any{"proof_path": path, "param": rt.param})
+				return
 			}
+			v.confirmed++
 			profile := types.PageProfile{ID: "GET " + path, URL: candidate, Method: "GET"}
 			v.storeFinding(profile, types.Finding{
 				Title:            fmt.Sprintf("Browser-rendered HTML injection permits iframe embedding in %q", rt.param),
@@ -6285,6 +6600,23 @@ func (v *VerifierAgent) probeBrowserIframeHTMLInjection(ctx context.Context, tar
 			return
 		}
 	}
+}
+
+func (v *VerifierAgent) confirmedBrowserXSSExists(path, param string) bool {
+	if v == nil || v.db == nil {
+		return false
+	}
+	var exists bool
+	_ = v.db.Conn().QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM findings
+			WHERE scan_id = ?
+			  AND confidence = 'confirmed'
+			  AND vuln_type IN ('xss', 'xss_browser')
+			  AND endpoint_id = ?
+			  AND param_name = ?
+		)`, v.scanID, "GET "+path, param).Scan(&exists)
+	return exists
 }
 
 func browserHTMLInjectionRenderTargets(db *store.DB, scanID int64, target string, limit int) []browserXSSRenderTarget {
@@ -17451,6 +17783,137 @@ func firstHeaderValue(headers map[string]string, name string) string {
 	return ""
 }
 
+// probeObservedFileInclusionSourceDisclosures promotes already-captured LFI
+// proof traffic. Explorer/follow-up probes may have requested php://filter and
+// received base64-encoded PHP source before the active file-read verifier runs;
+// this turns that receipt into a confirmed finding without another request.
+func (v *VerifierAgent) probeObservedFileInclusionSourceDisclosures(ctx context.Context) {
+	rows, err := v.db.Conn().Query(`
+		SELECT method, url, path, query, status_code, response_body
+		FROM traffic_resolved
+		WHERE scan_id = ?
+		  AND method = 'GET'
+		  AND is_filtered = 0
+		  AND status_code BETWEEN 200 AND 299
+		  AND lower(query) LIKE '%php%3a%2f%2ffilter%'
+		ORDER BY id ASC
+		LIMIT 50`, v.scanID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	reported := make(map[string]bool)
+	var candidates []observedFileInclusionSourceCandidate
+	for rows.Next() {
+		if ctx.Err() != nil {
+			return
+		}
+		var method, rawURL, pathValue, rawQuery string
+		var status int
+		var bodyBytes []byte
+		if err := rows.Scan(&method, &rawURL, &pathValue, &rawQuery, &status, &bodyBytes); err != nil {
+			continue
+		}
+		paramName, payload := fileReadInclusionParamAndPayloadFromRawQuery(rawQuery)
+		if paramName == "" || payload == "" {
+			continue
+		}
+		body := string(bodyBytes)
+		signal := fileReadSensitiveContentSignal(body)
+		if signal != "PHP source disclosure via local file inclusion" {
+			continue
+		}
+		key := strings.ToUpper(method) + " " + pathValue + " " + strings.ToLower(paramName)
+		if reported[key] {
+			continue
+		}
+		reported[key] = true
+		candidates = append(candidates, observedFileInclusionSourceCandidate{
+			Method:    method,
+			RawURL:    rawURL,
+			Path:      pathValue,
+			ParamName: paramName,
+			Payload:   payload,
+			Status:    status,
+			Body:      body,
+			Signal:    signal,
+		})
+	}
+	rows.Close()
+
+	for _, candidate := range candidates {
+		if ctx.Err() != nil {
+			return
+		}
+		v.confirmed++
+		v.storeObservedFileInclusionSourceDisclosureFinding(candidate.Method, candidate.RawURL, candidate.Path, candidate.ParamName, candidate.Payload, candidate.Status, candidate.Body, candidate.Signal)
+		v.db.InsertNarration(v.scanID, "verifier", "confirmed",
+			fmt.Sprintf("%s disclosed PHP source through `%s` using php://filter.", candidate.Path, candidate.ParamName),
+			candidate.RawURL, nil)
+	}
+}
+
+type observedFileInclusionSourceCandidate struct {
+	Method    string
+	RawURL    string
+	Path      string
+	ParamName string
+	Payload   string
+	Status    int
+	Body      string
+	Signal    string
+}
+
+func fileReadInclusionParamAndPayloadFromRawQuery(rawQuery string) (string, string) {
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", ""
+	}
+	for param, vals := range values {
+		for _, value := range vals {
+			if strings.Contains(strings.ToLower(value), "php://filter") {
+				return param, value
+			}
+		}
+	}
+	return "", ""
+}
+
+func (v *VerifierAgent) storeObservedFileInclusionSourceDisclosureFinding(method, rawURL, pathValue, paramName, payload string, status int, body string, signal string) {
+	endpointID := strings.ToUpper(method) + " " + pathValue
+	profile := types.PageProfile{ID: endpointID, URL: rawURL, Method: method}
+	parsed, _ := url.Parse(rawURL)
+	requestURI := pathValue
+	host := "<target>"
+	if parsed != nil {
+		if parsed.RequestURI() != "" {
+			requestURI = parsed.RequestURI()
+		}
+		if parsed.Host != "" {
+			host = parsed.Host
+		}
+	}
+	v.storeFinding(profile, types.Finding{
+		Title: fmt.Sprintf("Local file inclusion/source disclosure on %s via %s", pathValue, paramName),
+		Description: fmt.Sprintf("%s %s accepted `%s=%s` and returned base64-encoded PHP source. Signal: %s.",
+			strings.ToUpper(method), pathValue, paramName, payload, signal),
+		Severity:    types.SeverityHigh,
+		Confidence:  types.ConfidenceConfirmed,
+		EndpointID:  endpointID,
+		VulnType:    "file_inclusion",
+		ParamName:   paramName,
+		Payload:     payload,
+		PocRequest:  fmt.Sprintf("%s %s HTTP/1.1\nHost: %s\n", strings.ToUpper(method), requestURI, host),
+		PocResponse: fmt.Sprintf("HTTP/1.1 %d\n\n%s", status, truncateString(body, 700)),
+		StepsToReproduce: fmt.Sprintf("1. Send %s %s with `%s` set to `%s`.\n2. Base64-decode the response body.\n3. Observe PHP source code, proving local file inclusion/source disclosure.",
+			strings.ToUpper(method), pathValue, paramName, payload),
+		Impact:      "Attackers can read PHP source through the inclusion primitive. Source disclosure can reveal implementation details, include paths, secrets, and follow-on exploit paths.",
+		Remediation: "Do not include files directly from user-controlled parameters. Replace dynamic includes with a strict allowlist of server-side identifiers and block stream wrappers such as php://filter.",
+		Evidence:    fmt.Sprintf("URL: %s\nParam: %s\nPayload: %s\nSignal: %s\nResponse body begins with base64 PHP source: %s", rawURL, paramName, payload, signal, truncateString(body, 500)),
+	})
+}
+
 type commandInjectionCandidate struct {
 	Method    string
 	RawURL    string
@@ -17571,6 +18034,19 @@ func (v *VerifierAgent) commandInjectionCandidates(ctx context.Context, target s
 				ParamName: param,
 				Source:    "observed diagnostic/command-like endpoint",
 			})
+			if commandInjectionPathLooksUseful(pathValue) {
+				postKey := http.MethodPost + " " + pathValue + " " + strings.ToLower(param)
+				if !seen[postKey] {
+					seen[postKey] = true
+					out = append(out, commandInjectionCandidate{
+						Method:    http.MethodPost,
+						RawURL:    baseURL,
+						Path:      pathValue,
+						ParamName: param,
+						Source:    "observed diagnostic/command-like endpoint with form-style POST fallback",
+					})
+				}
+			}
 			if len(out) >= 40 {
 				break
 			}
@@ -17601,11 +18077,19 @@ func commandInjectionParamCandidates(pathValue, rawQuery string) []string {
 		}
 	}
 	if commandInjectionPathLooksUseful(pathValue) {
-		for _, param := range []string{"ipaddress", "ip", "host", "hostname", "domain", "target", "address"} {
+		for _, param := range commandInjectionDefaultParamsForPath(pathValue) {
 			add(param)
 		}
 	}
 	return out
+}
+
+func commandInjectionDefaultParamsForPath(pathValue string) []string {
+	lower := strings.ToLower(pathValue)
+	if strings.Contains(lower, "/exec") || strings.Contains(lower, "/execute") {
+		return []string{"ip", "ipaddress", "host", "hostname", "domain", "target", "address"}
+	}
+	return []string{"ipaddress", "ip", "host", "hostname", "domain", "target", "address"}
 }
 
 func commandInjectionPathLooksUseful(pathValue string) bool {
@@ -17647,14 +18131,29 @@ func (v *VerifierAgent) sendCommandInjectionProbe(ctx context.Context, candidate
 	if err != nil {
 		return 0, "", false
 	}
-	q := parsed.Query()
-	q.Set(candidate.ParamName, value)
-	parsed.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, candidate.Method, parsed.String(), nil)
+	method := strings.ToUpper(strings.TrimSpace(candidate.Method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	var body io.Reader
+	if method == http.MethodPost {
+		form := url.Values{}
+		form.Set(candidate.ParamName, value)
+		form.Set("Submit", "Submit")
+		body = strings.NewReader(form.Encode())
+	} else {
+		q := parsed.Query()
+		q.Set(candidate.ParamName, value)
+		parsed.RawQuery = q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, parsed.String(), body)
 	if err != nil {
 		return 0, "", false
 	}
 	req.Header.Set("User-Agent", "AOBTD/Verifier (command injection marker probe)")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	resp, err := v.client.Do(req)
 	if err != nil || resp == nil {
 		return 0, "", false
@@ -17697,18 +18196,26 @@ func commandInjectionLooksLikeReflection(body, payload string) bool {
 func (v *VerifierAgent) storeCommandInjectionFinding(candidate commandInjectionCandidate, payload, marker string, baselineStatus int, baselineBody string, status int, body string, signal string) {
 	key := strings.ToUpper(candidate.Method) + " " + candidate.Path
 	profile := types.PageProfile{ID: key, URL: candidate.RawURL, Method: candidate.Method}
+	pocRequest := fmt.Sprintf("%s %s?%s=%s HTTP/1.1\nHost: <target>\n",
+		candidate.Method, candidate.Path, candidate.ParamName, url.QueryEscape(payload))
+	if strings.EqualFold(candidate.Method, http.MethodPost) {
+		form := url.Values{}
+		form.Set(candidate.ParamName, payload)
+		form.Set("Submit", "Submit")
+		pocRequest = fmt.Sprintf("%s %s HTTP/1.1\nHost: <target>\nContent-Type: application/x-www-form-urlencoded\nContent-Length: %d\n\n%s",
+			http.MethodPost, candidate.Path, len(form.Encode()), form.Encode())
+	}
 	v.storeFinding(profile, types.Finding{
 		Title: fmt.Sprintf("Command injection on %s via %s", candidate.Path, candidate.ParamName),
 		Description: fmt.Sprintf("%s %s executed a benign shell marker supplied in `%s`. Baseline status was %d; payload status was %d. Signal: %s.",
 			candidate.Method, candidate.Path, candidate.ParamName, baselineStatus, status, signal),
-		Severity:   types.SeverityCritical,
-		Confidence: types.ConfidenceConfirmed,
-		EndpointID: key,
-		VulnType:   "command_injection",
-		ParamName:  candidate.ParamName,
-		Payload:    payload,
-		PocRequest: fmt.Sprintf("%s %s?%s=%s HTTP/1.1\nHost: <target>\n",
-			candidate.Method, candidate.Path, candidate.ParamName, url.QueryEscape(payload)),
+		Severity:    types.SeverityCritical,
+		Confidence:  types.ConfidenceConfirmed,
+		EndpointID:  key,
+		VulnType:    "command_injection",
+		ParamName:   candidate.ParamName,
+		Payload:     payload,
+		PocRequest:  pocRequest,
 		PocResponse: fmt.Sprintf("HTTP/1.1 %d\n\n%s", status, truncateString(body, 700)),
 		StepsToReproduce: fmt.Sprintf("1. Send baseline: %s %s?%s=127.0.0.1.\n2. Send payload: %s %s?%s=%s.\n3. Observe marker `%s` in the response.",
 			candidate.Method, candidate.Path, candidate.ParamName,
@@ -18241,8 +18748,9 @@ func fileReadParamCandidates(pathValue, rawQuery string) []string {
 		out = append(out, param)
 	}
 	values, _ := url.ParseQuery(rawQuery)
+	pathUseful := fileReadPathLooksUseful(pathValue)
 	for param := range values {
-		if fileReadParamNameLooksUseful(param) {
+		if fileReadParamNameLooksUseful(param) && (!fileReadParamNeedsPathContext(param) || pathUseful) {
 			add(param)
 		}
 	}
@@ -18263,6 +18771,7 @@ func fileReadPathLooksUseful(pathValue string) bool {
 	for _, token := range []string{
 		"pathtraversal", "path-traversal", "directorytraversal", "directory-traversal",
 		"/file", "/files", "/download", "/view", "/load", "/template", "/asset",
+		"/fi/", "/include", "/includes", "file-inclusion", "fileinclusion",
 	} {
 		if strings.Contains(lower, token) {
 			return true
@@ -18282,7 +18791,16 @@ func fileReadPathLooksPathTraversalLesson(pathValue string) bool {
 func fileReadParamNameLooksUseful(param string) bool {
 	lower := strings.ToLower(strings.TrimSpace(param))
 	switch lower {
-	case "file", "filename", "file_name", "filepath", "file_path", "path", "template", "name", "document", "resource":
+	case "file", "filename", "file_name", "filepath", "file_path", "path", "page", "template", "name", "document", "resource":
+		return true
+	default:
+		return false
+	}
+}
+
+func fileReadParamNeedsPathContext(param string) bool {
+	switch strings.ToLower(strings.TrimSpace(param)) {
+	case "name", "page", "resource":
 		return true
 	default:
 		return false
@@ -18309,9 +18827,24 @@ func fileReadTraversalPayloads(candidate fileReadTraversalCandidate) []fileReadT
 		{Value: "..%252fJWT%252fSymmetricAlgoKeys.json", Description: "double-encoded sibling JWT key material file"},
 	}
 	if !strings.Contains(strings.ToLower(candidate.Path), "pathtraversal") {
-		return payloads[2:]
+		payloads = payloads[2:]
+	}
+	if fileReadLooksLikePHPInclusionCandidate(candidate) {
+		payloads = append([]fileReadTraversalPayload{
+			{Value: "php://filter/read=convert.base64-encode/resource=include.php", Description: "PHP filter source disclosure"},
+		}, payloads...)
 	}
 	return payloads
+}
+
+func fileReadLooksLikePHPInclusionCandidate(candidate fileReadTraversalCandidate) bool {
+	lowerPath := strings.ToLower(candidate.Path)
+	lowerParam := strings.ToLower(candidate.ParamName)
+	return lowerParam == "page" ||
+		strings.Contains(lowerPath, "/fi/") ||
+		strings.Contains(lowerPath, "include") ||
+		strings.Contains(lowerPath, "fileinclusion") ||
+		strings.Contains(lowerPath, "file-inclusion")
 }
 
 func (v *VerifierAgent) sendFileReadTraversalProbe(ctx context.Context, candidate fileReadTraversalCandidate, value string) (int, string, bool) {
@@ -18363,9 +18896,11 @@ func fileReadTraversalDisplayValue(value string) string {
 func fileReadSensitiveContentSignal(body string) string {
 	lower := strings.ToLower(body)
 	switch {
+	case fileReadLooksLikePHPSourceDisclosure(body):
+		return "PHP source disclosure via local file inclusion"
 	case strings.Contains(lower, "dummy file") && strings.Contains(lower, "path traversal") && strings.Contains(lower, "password"):
 		return "hidden secret file content"
-	case strings.Contains(lower, "username") && strings.Contains(lower, "password"):
+	case json.Valid([]byte(strings.TrimSpace(body))) && strings.Contains(lower, "username") && strings.Contains(lower, "password"):
 		return "credential-like JSON file content"
 	case strings.Contains(lower, "algorithm") && strings.Contains(lower, "key") && strings.Contains(lower, "hs256"):
 		return "JWT signing-key material"
@@ -18378,6 +18913,20 @@ func fileReadSensitiveContentSignal(body string) string {
 	default:
 		return ""
 	}
+}
+
+func fileReadLooksLikePHPSourceDisclosure(body string) bool {
+	compact := strings.Join(strings.Fields(strings.TrimSpace(body)), "")
+	if len(compact) < 64 || len(compact)%4 != 0 {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(decoded))
+	return strings.Contains(lower, "<?php") &&
+		(strings.Contains(lower, "include") || strings.Contains(lower, "ini_get") || strings.Contains(lower, "$"))
 }
 
 func (v *VerifierAgent) storeFileReadTraversalFinding(candidate fileReadTraversalCandidate, payload fileReadTraversalPayload, baselineStatus int, baselineBody string, status int, body string, signal string) {
@@ -18659,9 +19208,9 @@ func looksLikeI18nBundleJSON(contentType, body string) bool {
 
 // probeOutdatedVersion pulls the target's advertised version (via common
 // disclosure endpoints and response headers) and compares it against a
-// small list of known-vulnerable pins. Emits a Finding if the advertised
-// version matches a known-public-CVE release or if the target self-identifies
-// as a deliberately-vulnerable training app (e.g. OWASP Juice Shop).
+// small list of known-vulnerable pins. Deliberately-vulnerable training apps
+// are reported as deployment exposure, not mislabeled as outdated components
+// without a version-specific advisory.
 //
 // This is a narrow, low-false-positive probe: we only flag versions we can
 // point at a published advisory for. Generic "Server: nginx" disclosure is
@@ -18719,7 +19268,7 @@ func (v *VerifierAgent) probeOutdatedVersion(ctx context.Context, target string)
 			u, resp.StatusCode, version, truncateString(body, 400))
 		v.storeFinding(profile, f)
 		v.db.InsertNarration(v.scanID, "verifier", "confirmed",
-			fmt.Sprintf("Outdated/vulnerable component: %s reports version %s", path, version),
+			f.Title,
 			u, nil)
 		return // one version finding is enough per scan — they all point at the same app
 	}
@@ -18746,38 +19295,33 @@ func extractVersionString(body string) string {
 func evaluateVersionKnownVulns(path, version, body string) (types.Finding, bool) {
 	lower := strings.ToLower(body)
 
-	// OWASP Juice Shop — any disclosed version is a finding because the app
-	// is deliberately-vulnerable training software. Detection combines path
-	// (the Juice Shop-specific version endpoint) and body hints.
+	// OWASP Juice Shop — deployment exposure is security-relevant because the
+	// app is deliberately vulnerable, but the version string alone does not
+	// prove a version-specific CVE or that the release is outdated.
 	isJuice := strings.Contains(path, "/rest/admin/application-version") ||
 		strings.Contains(lower, "juice") ||
 		strings.Contains(lower, "owasp-juice")
 
 	if isJuice {
 		return types.Finding{
-			Title: fmt.Sprintf("Outdated/vulnerable component: OWASP Juice Shop %s", version),
+			Title: fmt.Sprintf("Deliberately vulnerable training application exposed: OWASP Juice Shop %s", version),
 			Description: fmt.Sprintf(
 				"The application advertises itself as OWASP Juice Shop version %s via %s. "+
-					"Juice Shop is a deliberately-vulnerable training application — every deployed "+
-					"instance ships with dozens of known security bugs. Exposing the version "+
-					"publicly also lets any attacker consult the full challenge catalogue and "+
-					"select high-impact issues to reproduce.",
+					"Juice Shop is intentionally insecure training software. This finding identifies "+
+					"the deployment risk; it does not claim that the observed version is outdated or "+
+					"that a particular CVE applies based on the version string alone.",
 				version, path),
 			Severity:   types.SeverityMedium,
 			Confidence: types.ConfidenceConfirmed,
-			VulnType:   "vulnerable_component",
+			VulnType:   "training_application_exposure",
 			Payload:    "(no payload — direct GET)",
 			StepsToReproduce: fmt.Sprintf(
 				"1. Send an unauthenticated GET to %s.\n"+
 					"2. Observe the response discloses Juice Shop version %s.\n"+
-					"3. Consult the OWASP Juice Shop CHANGELOG / challenge list for known issues in that release.",
+					"3. Confirm whether this deliberately vulnerable application is intentionally exposed to this network.",
 				path, version),
-			Impact: "Attackers can identify the application, enumerate applicable CVEs / " +
-				"publicly-documented challenges, and tailor exploits against it without ever " +
-				"probing blind.",
-			Remediation: "Disable the version disclosure endpoint or gate it behind authentication. " +
-				"Track and apply security updates promptly. If this host is used for training, " +
-				"restrict network access so it cannot be reached by unintended parties.",
+			Impact:      "If reachable by unintended users, a deliberately vulnerable application exposes numerous intentional attack paths and can become a foothold into its hosting environment.",
+			Remediation: "Restrict training deployments to an isolated lab network and remove them from production ingress. Disabling version disclosure is defense in depth, not the primary fix.",
 		}, true
 	}
 

@@ -49,6 +49,13 @@ func TestTargetCopilotDrawerAndContextContractsAreEmbedded(t *testing.T) {
 		"copilotOpen && !askBusy && copilotDirectiveRefreshNeeded()",
 		"approval_decision",
 		"Brief me: what is observed, inferred, and still unknown",
+		"Where are the user-controlled inputs?",
+		"Does this target have login, search, checkout",
+		"which are only observed, queued, running, tested, or confirmed",
+		"Ask like a pentester",
+		"inputs &amp; parameters",
+		"test lifecycle",
+		"Ask for exact inputs, features, evidence, or test status",
 		"function askReconObjective",
 		"Plan with Copilot",
 		"function askInlineMd",
@@ -339,13 +346,18 @@ func TestTargetCopilotIsDockedAndResponsive(t *testing.T) {
 	}
 	html := string(raw)
 	for _, contract := range []string{
-		"--copilot-w: 390px",
+		"--copilot-w: 460px",
 		"body.copilot-open .copilot-drawer",
-		"@media (max-width: 1440px)",
+		"@media (max-width: 1520px)",
 		"position: fixed; z-index: 180",
 		"body.copilot-open .atlas-zoom",
 		"body.copilot-open .atlas-minimap",
 		"body.home-mode .copilot-drawer",
+		"class=\"ask-page\"",
+		"class=\"ask-page-surface\"",
+		"Evidence-grounded",
+		"Approval before requests or scan steering",
+		"Shift + Enter for a new line",
 	} {
 		if !strings.Contains(html, contract) {
 			t.Fatalf("responsive Target Copilot missing %q", contract)

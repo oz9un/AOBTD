@@ -148,10 +148,51 @@ func effectiveImpact(action Action) (ActionClass, DecisionCode, string) {
 		return "", CodeUnsupportedMethod,
 			fmt.Sprintf("HTTP method %q has no trusted classification", method)
 	}
+	if sensitiveClass := sensitiveTargetImpact(action.TargetURL, method); impactRank(sensitiveClass) > impactRank(methodClass) {
+		methodClass = sensitiveClass
+	}
 	if explicit == "" || impactRank(methodClass) >= impactRank(explicit) {
 		return methodClass, "", ""
 	}
 	return explicit, "", ""
+}
+
+// sensitiveTargetImpact raises credential/account mutation routes above their
+// wire method. Some intentionally vulnerable applications expose password
+// changes as GET requests, so method-only classification can otherwise let a
+// model-generated "fetch" lock the operator out during an ordinary Active
+// scan. UI navigation remains allowed: hash-only forgot/reset-password pages
+// do not appear in URL.Path and carry no mutation parameters.
+func sensitiveTargetImpact(rawURL, method string) ActionClass {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	normalizedPath := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(parsed.Path))
+	credentialMutation := strings.Contains(normalizedPath, "changepassword") ||
+		strings.Contains(normalizedPath, "updatepassword") ||
+		strings.Contains(normalizedPath, "setpassword") ||
+		strings.Contains(normalizedPath, "resetpassword") ||
+		strings.Contains(normalizedPath, "passwordreset")
+	if !credentialMutation {
+		return ""
+	}
+
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case "POST", "PUT", "PATCH", "DELETE":
+		return ActionDestructive
+	}
+
+	path := strings.ToLower(parsed.Path)
+	if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/rest/") {
+		return ActionDestructive
+	}
+	for _, key := range []string{"current", "new", "newpassword", "password", "repeat", "token"} {
+		if strings.TrimSpace(parsed.Query().Get(key)) != "" {
+			return ActionDestructive
+		}
+	}
+	return ""
 }
 
 func (d Decision) allow(reason string) Decision {

@@ -3,6 +3,7 @@ package target
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -180,6 +181,17 @@ func RegistrableDomain(raw string) (string, error) {
 		return "", fmt.Errorf("target has no registrable domain: %w", err)
 	}
 	return root, nil
+}
+
+// IsIPLiteral reports whether a target URL names an IPv4 or IPv6 address.
+// IP literals are concrete hosts and cannot establish a wildcard subdomain
+// boundary for Smart discovery.
+func IsIPLiteral(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	return net.ParseIP(strings.Trim(parsed.Hostname(), "[]")) != nil
 }
 
 func apexOrWWWRoot(host string) (string, bool) {

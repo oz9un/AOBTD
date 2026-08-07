@@ -25,6 +25,84 @@ func TestParseActionRecoversCompletedNavigateFromTruncatedReason(t *testing.T) {
 	}
 }
 
+func TestParseActionRecoversMiniMaxDroppedNavigatePrefix(t *testing.T) {
+	tests := []string{
+		`"url": "http://juice-shop.test:3000/#/login",
+  "reason": "Login page is a primary authentication attack surface."`,
+		`navigate",
+  "url": "http://juice-shop.test:3000/#/contact",
+  "selector": "",
+  "value": "",
+  "reason": "Navigate to the contact workflow."`,
+		`"navigate",
+  "url": "http://juice-shop.test:3000/#/score-board",
+  "reason": "Open the observed score board route."`,
+		`": "navigate",
+  "url": "http://127.0.0.1:4280/vulnerabilities/xss_r/",
+  "reason": "XSS Reflected is a distinct vulnerability surface."`,
+		`action": "navigate",
+  "url": "http://127.0.0.1:4280/instructions.php",
+  "reason": "Navigate to the instructions page to ground the application identity."`,
+	}
+	for _, raw := range tests {
+		action, err := ParseAction(raw)
+		if err != nil {
+			t.Fatalf("ParseAction(%q) error = %v", raw, err)
+		}
+		if action.Action != "navigate" || action.URL == "" || action.Reason == "" {
+			t.Fatalf("unexpected recovered action: %+v", action)
+		}
+	}
+}
+
+func TestParseActionRecoversMiniMaxDroppedSelectorPrefix(t *testing.T) {
+	tests := []struct {
+		raw        string
+		wantAction string
+		wantValue  string
+	}{
+		{
+			raw: `"selector": "#navbarAccount",
+  "reason": "Clicking Account opens the login and registration dialog.",
+  "question": ""
+})`,
+			wantAction: "click",
+		},
+		{
+			raw: `{"selector": "#searchQuery",
+  "value": "aobtd-test",
+  "reason": "Fill the observed search field."
+})`,
+			wantAction: "fill",
+			wantValue:  "aobtd-test",
+		},
+	}
+	for _, tt := range tests {
+		action, err := ParseAction(tt.raw)
+		if err != nil {
+			t.Fatalf("ParseAction(%q) error = %v", tt.raw, err)
+		}
+		if action.Action != tt.wantAction || action.Selector == "" ||
+			action.Value != tt.wantValue || action.Reason == "" {
+			t.Fatalf("unexpected recovered action: %+v", action)
+		}
+	}
+}
+
+func TestParseActionDoesNotInferNavigateFromArbitraryURLField(t *testing.T) {
+	raw := `The next page might be useful: "url":"https://example.test/admin"`
+	if action, err := ParseAction(raw); err == nil {
+		t.Fatalf("ParseAction() = %+v, want error", action)
+	}
+}
+
+func TestParseActionDoesNotInferSelectorActionFromProse(t *testing.T) {
+	raw := `The likely account control has "selector":"#navbarAccount".`
+	if action, err := ParseAction(raw); err == nil {
+		t.Fatalf("ParseAction() = %+v, want error", action)
+	}
+}
+
 func TestParseActionDoesNotRecoverTruncatedURL(t *testing.T) {
 	raw := `{"action":"navigate","url":"https://www.nasa.gov/multi`
 	if action, err := ParseAction(raw); err == nil {

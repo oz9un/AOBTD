@@ -112,14 +112,13 @@ func (e *ExplorerAgent) Start(ctx context.Context) error {
 		"max_per_pass", e.maxPerPass, "budget", e.perPassBudget)
 
 	deadline := time.Now().Add(e.perPassBudget)
+	passCtx, cancelPass := explorerPassContext(ctx, deadline)
+	defer cancelPass()
 	done := 0
 	timedOut := false
 	for done < e.maxPerPass {
-		if ctx.Err() != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			timedOut = true
+		if passCtx.Err() != nil {
+			timedOut = ctx.Err() == nil
 			break
 		}
 		// Claim one task at a time. Claiming a batch before executing it left
@@ -129,15 +128,19 @@ func (e *ExplorerAgent) Start(ctx context.Context) error {
 			break
 		}
 		for _, task := range batch {
-			if ctx.Err() != nil {
+			if passCtx.Err() != nil {
+				timedOut = ctx.Err() == nil
 				break
 			}
-			if time.Now().After(deadline) {
-				timedOut = true
-				break
-			}
-			e.executeTask(ctx, task)
+			// The pass deadline must reach in-flight HTTP and LLM calls. A
+			// loop-only time check let one MiniMax judgement run for minutes
+			// after a foreground convergence drain advertised a 90s budget.
+			e.executeTask(passCtx, task)
 			done++
+			if passCtx.Err() != nil {
+				timedOut = ctx.Err() == nil
+				break
+			}
 			if done >= e.maxPerPass {
 				break
 			}
@@ -220,9 +223,11 @@ func (e *ExplorerAgent) PersistentRunUntil(ctx context.Context, stop <-chan stru
 // doesn't starve other agents.
 func (e *ExplorerAgent) drainPass(ctx context.Context, budget time.Duration, limit int) {
 	deadline := time.Now().Add(budget)
+	passCtx, cancelPass := explorerPassContext(ctx, deadline)
+	defer cancelPass()
 	done := 0
 	for done < limit {
-		if ctx.Err() != nil || time.Now().After(deadline) {
+		if passCtx.Err() != nil {
 			return
 		}
 		batch, err := e.db.PopPendingFollowUps(e.scanID, 1)
@@ -230,16 +235,20 @@ func (e *ExplorerAgent) drainPass(ctx context.Context, budget time.Duration, lim
 			return
 		}
 		for _, task := range batch {
-			if ctx.Err() != nil || time.Now().After(deadline) {
+			if passCtx.Err() != nil {
 				return
 			}
-			e.executeTask(ctx, task)
+			e.executeTask(passCtx, task)
 			done++
 			if done >= limit {
 				return
 			}
 		}
 	}
+}
+
+func explorerPassContext(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	return context.WithDeadline(parent, deadline)
 }
 
 func (e *ExplorerAgent) executeTask(ctx context.Context, task store.FollowUp) {
@@ -585,6 +594,7 @@ func (e *ExplorerAgent) runProbeParam(ctx context.Context, task store.FollowUp) 
 				e.storeAsTraffic(formProbe.URL, http.MethodPost, resp, body, reqHeaders, []byte(formProbe.Values.Encode()), task.ID, task.HypothesisID)
 				e.maybeStoreCommandInjectionParamFinding(task, paramName, http.MethodPost, formProbe.URL, vs, []byte(formProbe.Values.Encode()), resp, body)
 				e.maybeStoreSQLInjectionParamFinding(task, paramName, http.MethodPost, formProbe.URL, vs, []byte(formProbe.Values.Encode()), resp, body)
+				e.maybeStoreFileInclusionSourceDisclosureFinding(task, paramName, http.MethodPost, formProbe.URL, vs, []byte(formProbe.Values.Encode()), resp, body)
 				responses = append(responses, fmt.Sprintf("FORM POST %s→%d/%db", vs, resp.StatusCode, len(body)))
 			default:
 				resp, body, reqHeaders, err := e.sendGET(ctx, formProbe.URL, authHeaders)
@@ -601,6 +611,7 @@ func (e *ExplorerAgent) runProbeParam(ctx context.Context, task store.FollowUp) 
 				e.storeAsTraffic(formProbe.URL, http.MethodGet, resp, body, reqHeaders, nil, task.ID, task.HypothesisID)
 				e.maybeStoreCommandInjectionParamFinding(task, paramName, http.MethodGet, formProbe.URL, vs, nil, resp, body)
 				e.maybeStoreSQLInjectionParamFinding(task, paramName, http.MethodGet, formProbe.URL, vs, nil, resp, body)
+				e.maybeStoreFileInclusionSourceDisclosureFinding(task, paramName, http.MethodGet, formProbe.URL, vs, nil, resp, body)
 				responses = append(responses, fmt.Sprintf("FORM GET %s→%d/%db", vs, resp.StatusCode, len(body)))
 			}
 			continue
@@ -620,6 +631,7 @@ func (e *ExplorerAgent) runProbeParam(ctx context.Context, task store.FollowUp) 
 		e.storeAsTraffic(probedURL, "GET", resp, body, reqHeaders, nil, task.ID, task.HypothesisID)
 		e.maybeStoreCommandInjectionParamFinding(task, paramName, http.MethodGet, probedURL, vs, nil, resp, body)
 		e.maybeStoreSQLInjectionParamFinding(task, paramName, http.MethodGet, probedURL, vs, nil, resp, body)
+		e.maybeStoreFileInclusionSourceDisclosureFinding(task, paramName, http.MethodGet, probedURL, vs, nil, resp, body)
 		responses = append(responses, fmt.Sprintf("%s→%d/%db", vs, resp.StatusCode, len(body)))
 		if resp.StatusCode == http.StatusMethodNotAllowed {
 			postURL, postBody := formPOSTProbe(task.URL, paramName, vs)
@@ -637,6 +649,7 @@ func (e *ExplorerAgent) runProbeParam(ctx context.Context, task store.FollowUp) 
 			e.storeAsTraffic(postURL, "POST", postResp, postRespBody, postReqHeaders, []byte(postBody.Encode()), task.ID, task.HypothesisID)
 			e.maybeStoreCommandInjectionParamFinding(task, paramName, http.MethodPost, postURL, vs, []byte(postBody.Encode()), postResp, postRespBody)
 			e.maybeStoreSQLInjectionParamFinding(task, paramName, http.MethodPost, postURL, vs, []byte(postBody.Encode()), postResp, postRespBody)
+			e.maybeStoreFileInclusionSourceDisclosureFinding(task, paramName, http.MethodPost, postURL, vs, []byte(postBody.Encode()), postResp, postRespBody)
 			responses = append(responses, fmt.Sprintf("POST %s→%d/%db", vs, postResp.StatusCode, len(postRespBody)))
 
 			if missing := missingRequiredFormParameter(postRespBody); missing != "" && postBody.Get(missing) == "" {
@@ -653,6 +666,7 @@ func (e *ExplorerAgent) runProbeParam(ctx context.Context, task store.FollowUp) 
 					e.storeAsTraffic(postURL, "POST", retryResp, retryRespBody, retryReqHeaders, []byte(retryBody.Encode()), task.ID, task.HypothesisID)
 					e.maybeStoreCommandInjectionParamFinding(task, paramName, http.MethodPost, postURL, vs, []byte(retryBody.Encode()), retryResp, retryRespBody)
 					e.maybeStoreSQLInjectionParamFinding(task, paramName, http.MethodPost, postURL, vs, []byte(retryBody.Encode()), retryResp, retryRespBody)
+					e.maybeStoreFileInclusionSourceDisclosureFinding(task, paramName, http.MethodPost, postURL, vs, []byte(retryBody.Encode()), retryResp, retryRespBody)
 					responses = append(responses, fmt.Sprintf("POST %s+%s→%d/%db", vs, missing, retryResp.StatusCode, len(retryRespBody)))
 				}
 			}
@@ -915,6 +929,67 @@ func commandInjectionProbeEvidenceSignal(body, payload string) string {
 		}
 	}
 	return ""
+}
+
+func (e *ExplorerAgent) maybeStoreFileInclusionSourceDisclosureFinding(task store.FollowUp, paramName, method, rawURL, payload string, reqBody []byte, resp *http.Response, body []byte) {
+	if resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return
+	}
+	if !strings.Contains(strings.ToLower(payload), "php://filter") {
+		return
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return
+	}
+	reasonLower := strings.ToLower(task.Reason)
+	if !fileReadPathLooksUseful(parsed.Path) &&
+		!strings.Contains(reasonLower, "file inclusion") &&
+		!strings.Contains(reasonLower, "lfi") &&
+		!strings.Contains(reasonLower, "path traversal") {
+		return
+	}
+	signal := fileReadSensitiveContentSignal(string(body))
+	if signal != "PHP source disclosure via local file inclusion" {
+		return
+	}
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		method = http.MethodGet
+	}
+	endpointID := method + " " + parsed.Path
+	title := fmt.Sprintf("Local file inclusion/source disclosure via %s on %s", paramName, parsed.Path)
+	if e.db.FindingExists(e.scanID, title, endpointID) {
+		return
+	}
+	var pocReq string
+	if method == http.MethodPost {
+		pocReq = buildRawPOSTRequest(rawURL, "application/x-www-form-urlencoded", reqBody, nil)
+	} else {
+		pocReq = buildRawGETRequest(rawURL, nil)
+	}
+	pocResp := fmt.Sprintf("HTTP/1.1 %d\nContent-Type: %s\n\n%s",
+		resp.StatusCode, resp.Header.Get("Content-Type"), truncateString(string(body), 1200))
+	_, _ = e.db.InsertFinding(e.scanID, types.Finding{
+		Title: title,
+		Description: fmt.Sprintf("%s %s accepted `%s=%s` and returned base64-encoded PHP source. Signal: %s.",
+			method, rawURL, paramName, payload, signal),
+		Severity:    types.SeverityHigh,
+		Confidence:  types.ConfidenceConfirmed,
+		EndpointID:  endpointID,
+		VulnType:    "file_inclusion",
+		ParamName:   paramName,
+		Payload:     payload,
+		PocRequest:  pocReq,
+		PocResponse: pocResp,
+		StepsToReproduce: fmt.Sprintf("1. Send the same %s request to %s with `%s` set to `%s`.\n2. Base64-decode the response body.\n3. Observe PHP source code, proving local file inclusion/source disclosure.",
+			method, rawURL, paramName, payload),
+		Impact:      "Attackers can read PHP source through the inclusion primitive. Source disclosure can reveal implementation details, include paths, secrets, and follow-on exploit paths.",
+		Remediation: "Do not include files directly from user-controlled parameters. Replace dynamic includes with a strict allowlist of server-side identifiers and block stream wrappers such as php://filter.",
+		Evidence: fmt.Sprintf("URL: %s\nMethod: %s\nParam: %s\nPayload: %s\nSignal: %s\nResponse preview: %s",
+			rawURL, method, paramName, payload, signal, truncateString(string(body), 700)),
+		HypothesisID: task.HypothesisID,
+	})
 }
 
 func (e *ExplorerAgent) maybeStoreSQLInjectionParamFinding(task store.FollowUp, paramName, method, rawURL, payload string, reqBody []byte, resp *http.Response, body []byte) {
@@ -1329,12 +1404,41 @@ func (e *ExplorerAgent) storeGraphQLIntrospectionProbeFinding(task store.FollowU
 }
 
 type idorVerdict struct {
-	IsIDOR      bool     `json:"is_idor"`
-	Confidence  float64  `json:"confidence"`
-	Severity    string   `json:"severity"`
-	Evidence    string   `json:"evidence"`
-	AffectedIDs []string `json:"affected_ids"`
-	Reasoning   string   `json:"first_person_reasoning"`
+	IsIDOR      bool                `json:"is_idor"`
+	Confidence  float64             `json:"confidence"`
+	Severity    string              `json:"severity"`
+	Evidence    string              `json:"evidence"`
+	AffectedIDs flexibleStringSlice `json:"affected_ids"`
+	Reasoning   string              `json:"first_person_reasoning"`
+}
+
+// flexibleStringSlice accepts both the requested JSON string ids and numeric
+// ids that reasoning models commonly emit. Resource identifiers are rendered
+// into reports as text either way, so rejecting an otherwise valid verdict
+// over this harmless representation difference loses confirmed evidence.
+type flexibleStringSlice []string
+
+func (s *flexibleStringSlice) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		var text string
+		if err := json.Unmarshal(item, &text); err == nil {
+			out = append(out, text)
+			continue
+		}
+		var number json.Number
+		if err := json.Unmarshal(item, &number); err == nil && number.String() != "" {
+			out = append(out, number.String())
+			continue
+		}
+		return fmt.Errorf("affected id must be a string or number: %s", string(item))
+	}
+	*s = out
+	return nil
 }
 
 // idorJudgePrompt — the whole point of the tool. The LLM reads the responses
@@ -1394,7 +1498,7 @@ func (e *ExplorerAgent) judgeIDOR(ctx context.Context, urlTemplate, reason strin
 		SystemPrompt: idorJudgePrompt,
 		Messages:     []llm.Message{{Role: "user", Content: user}},
 		Temperature:  0.1,
-		MaxTokens:    512,
+		MaxTokens:    llm.StructuredOutputTokenLimit(e.provider, 512, 2048),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, e.provider, e.budget, req, est)
@@ -1404,25 +1508,23 @@ func (e *ExplorerAgent) judgeIDOR(ctx context.Context, urlTemplate, reason strin
 	}
 	modelID := llm.ResponseModel(resp, e.provider)
 	costU := llm.CostMicroCents(modelID, resp.Usage)
-	e.db.LogAIFull(e.scanID, "explorer", "idor_judge",
-		urlTemplate, "", urlTemplate, truncateString(resp.Content, 200),
-		resp.Usage.InputTokens, resp.Usage.OutputTokens, dur, costU, modelID,
-		llm.RenderPrompt(req), resp.Content)
 
 	// Use the shared brace-counting extractJSON (defined in analyzer_agent.go)
 	// instead of the old naive "first { to last }" heuristic, so MiniMax-M2's
 	// multi-object + prose-wrapped output parses reliably. The old code dropped
 	// ~30% of scan 27's IDOR verdicts on this same bug.
 	var v idorVerdict
-	if err := json.Unmarshal([]byte(resp.Content), &v); err != nil {
-		cleaned := extractJSON(resp.Content)
-		if cleaned == resp.Content {
-			return nil, fmt.Errorf("parse verdict: %w", err)
-		}
-		if err2 := json.Unmarshal([]byte(cleaned), &v); err2 != nil {
-			return nil, fmt.Errorf("parse verdict: %w", err2)
-		}
+	if err := unmarshalSingleModelObject(resp.Content, &v); err != nil {
+		_ = e.db.LogAIFull(e.scanID, "explorer", "idor_judge_failed",
+			urlTemplate, "", urlTemplate, err.Error(),
+			resp.Usage.InputTokens, resp.Usage.OutputTokens, dur, costU, modelID,
+			llm.RenderPrompt(req), resp.Content)
+		return nil, fmt.Errorf("parse verdict: %w", err)
 	}
+	_ = e.db.LogAIFull(e.scanID, "explorer", "idor_judge",
+		urlTemplate, "", urlTemplate, truncateString(resp.Content, 200),
+		resp.Usage.InputTokens, resp.Usage.OutputTokens, dur, costU, modelID,
+		llm.RenderPrompt(req), resp.Content)
 	// Sanity defaults
 	if v.Severity == "" {
 		if v.IsIDOR {
@@ -1521,6 +1623,44 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// unmarshalSingleModelObject accepts the ordinary object form and the common
+// one-element array form emitted by some reasoning models in JSON mode. It
+// rejects ambiguous multi-verdict responses instead of silently choosing a
+// result that may refer to another probe.
+func unmarshalSingleModelObject[T any](content string, dst *T) error {
+	content = repairDroppedVerdictPrefix(content)
+	cleaned := extractJSON(content)
+	objectErr := json.Unmarshal([]byte(cleaned), dst)
+	if objectErr == nil {
+		return nil
+	}
+	// If the extracted value is clearly an object, retain the useful field-
+	// level error instead of replacing it with "cannot unmarshal object into
+	// []RawMessage" from the array fallback.
+	if strings.HasPrefix(strings.TrimSpace(cleaned), "{") {
+		return objectErr
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(cleaned), &items); err != nil {
+		return err
+	}
+	if len(items) != 1 {
+		return fmt.Errorf("expected one verdict object, got %d", len(items))
+	}
+	return json.Unmarshal(items[0], dst)
+}
+
+func repairDroppedVerdictPrefix(content string) string {
+	trimmed := strings.TrimSpace(content)
+	// Observed MiniMax JSON-mode variants after dropping the opening {"is
+	// bytes from {"is_idor":...} or {"is_vuln":...}. Keep the repair exact:
+	// arbitrary prose and other missing fields remain parse failures.
+	if strings.HasPrefix(trimmed, `_idor"`) || strings.HasPrefix(trimmed, `_vuln"`) {
+		return `{"is` + trimmed
+	}
+	return content
+}
+
 // Note: the old extractAnyJSON helper was removed — it used a naive first-{
 // to last-} heuristic that broke on MiniMax-M2's multi-object responses.
 // Callers now use the shared extractJSON from analyzer_agent.go which does
@@ -1614,7 +1754,7 @@ func (e *ExplorerAgent) judgeBusinessLogic(ctx context.Context, targetURL, metho
 		SystemPrompt: businessLogicJudgePrompt,
 		Messages:     []llm.Message{{Role: "user", Content: user}},
 		Temperature:  0.1,
-		MaxTokens:    512,
+		MaxTokens:    llm.StructuredOutputTokenLimit(e.provider, 512, 2048),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, e.provider, e.budget, req, est)
@@ -1624,23 +1764,22 @@ func (e *ExplorerAgent) judgeBusinessLogic(ctx context.Context, targetURL, metho
 	}
 	modelID := llm.ResponseModel(resp, e.provider)
 	costU := llm.CostMicroCents(modelID, resp.Usage)
-	e.db.LogAIFull(e.scanID, "explorer", "logic_judge",
+
+	// Same parser fix as judgeIDOR — share the brace-counting extractor.
+	var v businessLogicVerdict
+	if err := unmarshalSingleModelObject(resp.Content, &v); err != nil {
+		_ = e.db.LogAIFull(e.scanID, "explorer", "logic_judge_failed",
+			fmt.Sprintf("%s field='%s'", targetURL, field), "", targetURL,
+			err.Error(),
+			resp.Usage.InputTokens, resp.Usage.OutputTokens, dur, costU, modelID,
+			llm.RenderPrompt(req), resp.Content)
+		return nil, fmt.Errorf("parse verdict: %w", err)
+	}
+	_ = e.db.LogAIFull(e.scanID, "explorer", "logic_judge",
 		fmt.Sprintf("%s field='%s'", targetURL, field), "", targetURL,
 		truncateString(resp.Content, 200),
 		resp.Usage.InputTokens, resp.Usage.OutputTokens, dur, costU, modelID,
 		llm.RenderPrompt(req), resp.Content)
-
-	// Same parser fix as judgeIDOR — share the brace-counting extractor.
-	var v businessLogicVerdict
-	if err := json.Unmarshal([]byte(resp.Content), &v); err != nil {
-		cleaned := extractJSON(resp.Content)
-		if cleaned == resp.Content {
-			return nil, fmt.Errorf("parse verdict: %w", err)
-		}
-		if err2 := json.Unmarshal([]byte(cleaned), &v); err2 != nil {
-			return nil, fmt.Errorf("parse verdict: %w", err2)
-		}
-	}
 	if v.Severity == "" {
 		if v.IsVuln {
 			v.Severity = "medium"

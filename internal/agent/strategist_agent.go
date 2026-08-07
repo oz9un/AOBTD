@@ -72,7 +72,18 @@ type StrategistConfig struct {
 	PlanOnly bool          // persist beliefs, withhold executable directives
 }
 
-const strategistCallTimeout = 2 * time.Minute
+// Frontier reasoning providers can spend close to two minutes on a dense
+// final synthesis even after the world model is compacted. Keep this below
+// the five-minute convergence budget while leaving room for one transient
+// provider retry instead of converting a healthy scan into "incomplete".
+const strategistCallTimeout = 3 * time.Minute
+
+func strategistMaxOutputTokens(provider llm.Provider, reason string) int {
+	if reason == "recon_final_model" {
+		return llm.StructuredOutputTokenLimit(provider, 1600, 4096)
+	}
+	return llm.StructuredOutputTokenLimit(provider, 2400, 10240)
+}
 
 // NewStrategistAgent creates a Strategist. The provider should be a model
 // capable of structured-output + multi-hundred-token reasoning. Based on
@@ -207,7 +218,7 @@ func (s *StrategistAgent) runCycle(ctx context.Context, reason string) error {
 		}
 	}
 
-	userPrompt := buildStrategistPrompt(wm)
+	userPrompt := buildStrategistCyclePrompt(wm, reason, s.planOnly)
 
 	// Budget check
 	estTokens := s.provider.CountTokens(strategistSystemPromptV2 + userPrompt)
@@ -223,7 +234,7 @@ func (s *StrategistAgent) runCycle(ctx context.Context, reason string) error {
 		SystemPrompt: strategistSystemPromptV2,
 		Messages:     []llm.Message{{Role: "user", Content: userPrompt}},
 		Temperature:  0.15,
-		MaxTokens:    2400,
+		MaxTokens:    strategistMaxOutputTokens(s.provider, reason),
 		JSONMode:     true,
 	}
 	callCtx, cancel := context.WithTimeout(ctx, strategistCallTimeout)
@@ -231,15 +242,34 @@ func (s *StrategistAgent) runCycle(ctx context.Context, reason string) error {
 	resp, err := llm.CompleteBudgeted(callCtx, s.provider, s.budget, req, estTokens)
 	duration := time.Since(start)
 	if err != nil {
+		usage, modelID, billed := llm.UsageFromError(err)
+		if modelID == "" {
+			modelID = s.provider.ModelInfo().Name
+		}
+		cost := int64(0)
+		if billed {
+			cost = llm.CostMicroCents(modelID, usage)
+		}
 		// Still log the failed cycle for observability
 		s.db.InsertStrategistCycle(store.StrategistCycle{
 			ScanID:         s.scanID,
 			TriggerReason:  reason,
-			ModelID:        s.provider.ModelInfo().Name,
+			ModelID:        modelID,
 			WorldModelSize: len(userPrompt),
+			TokensIn:       usage.InputTokens,
+			TokensOut:      usage.OutputTokens,
 			DurationMs:     duration.Milliseconds(),
+			CostUcents:     cost,
 			Error:          err.Error(),
 		})
+		if billed {
+			_ = s.db.LogAIFull(s.scanID, "strategist", "plan_failed",
+				fmt.Sprintf("cycle %d (%s)", cycleNum, reason),
+				"", "", err.Error(),
+				usage.InputTokens, usage.OutputTokens,
+				duration.Milliseconds(), cost, modelID,
+				llm.RenderPrompt(req), "")
+		}
 		if errors.Is(err, llm.ErrBudgetExceeded) {
 			return fmt.Errorf("%w: %v", ErrStrategistBudgetLimited, err)
 		}

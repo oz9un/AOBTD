@@ -106,6 +106,80 @@ func TestOpenAICompatibleMiniMaxM2AdvertisesReasoningHeadroom(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleMiniMaxM3AdvertisesReasoningHeadroom(t *testing.T) {
+	provider, err := NewOpenAICompatible(OpenAICompatibleConfig{Model: "MiniMax-M3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := provider.ModelInfo()
+	if info.MaxContextTokens != 204800 || info.MaxOutputTokens != 10240 {
+		t.Fatalf("MiniMax model info = %+v", info)
+	}
+	if got := StructuredOutputTokenLimit(provider, 2400, 8192); got != 8192 {
+		t.Fatalf("structured output limit = %d, want 8192", got)
+	}
+	if got := StructuredOutputTokenLimit(provider, 2400, 12000); got != 10240 {
+		t.Fatalf("structured output limit above MiniMax model cap = %d, want 10240", got)
+	}
+}
+
+func TestOpenAICompatibleMiniMaxContinuesLengthExhaustedReasoningWithinAllowance(t *testing.T) {
+	var requests []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var captured map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, captured)
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = w.Write([]byte(`{"model":"MiniMax-M3","choices":[{"message":{"role":"assistant","content":"","reasoning_content":"I have worked out the compact plan."},"finish_reason":"length"}],"usage":{"prompt_tokens":5000,"completion_tokens":7680}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"model":"MiniMax-M3","choices":[{"message":{"role":"assistant","content":"{\"executive_summary\":\"Recovered\",\"hypotheses\":[],\"directives\":[]}","reasoning_content":"continuing"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5100,"completion_tokens":80}}`))
+	}))
+	defer srv.Close()
+
+	p, err := NewProvider("openai-compatible", srv.URL, "test-key", "MiniMax-M3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(t.Context(), &Request{
+		Messages:  []Message{{Role: "user", Content: "return a compact plan"}},
+		MaxTokens: 10240,
+		JSONMode:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("provider calls = %d, want initial request + continuation", len(requests))
+	}
+	if got := requests[0]["max_tokens"]; got != float64(7680) {
+		t.Fatalf("initial max_tokens = %v, want 7680", got)
+	}
+	if got := requests[1]["max_tokens"]; got != float64(2560) {
+		t.Fatalf("continuation max_tokens = %v, want 2560", got)
+	}
+	if got := requests[0]["reasoning_split"]; got != true {
+		t.Fatalf("reasoning_split = %v, want true", got)
+	}
+	messages, ok := requests[1]["messages"].([]any)
+	if !ok || len(messages) != 3 {
+		t.Fatalf("continuation messages = %#v, want original + assistant reasoning + final-answer request", requests[1]["messages"])
+	}
+	assistant, _ := messages[1].(map[string]any)
+	if assistant["reasoning_content"] != "I have worked out the compact plan." {
+		t.Fatalf("continuation lost prior reasoning: %#v", assistant)
+	}
+	if !strings.Contains(resp.Content, "Recovered") {
+		t.Fatalf("response content = %q", resp.Content)
+	}
+	if resp.Usage.InputTokens != 10100 || resp.Usage.OutputTokens != 7760 {
+		t.Fatalf("combined usage = %+v", resp.Usage)
+	}
+}
+
 func TestOpenAICompatibleEmptyContentIsError(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,8 +203,15 @@ func TestOpenAICompatibleEmptyContentIsError(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "reasoning_content") || !strings.Contains(msg, "finish_reason") {
 		t.Fatalf("Complete() error = %q, want reasoning_content + finish_reason context", msg)
 	}
-	if calls != 2 {
-		t.Fatalf("provider calls = %d, want one immediate retry", calls)
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want no retry for deterministic length exhaustion", calls)
+	}
+	usage, modelID, billed := UsageFromError(err)
+	if !billed || modelID != "glm-5.2" {
+		t.Fatalf("UsageFromError() = %+v, %q, %t", usage, modelID, billed)
+	}
+	if usage.InputTokens != 3 || usage.OutputTokens != 2048 {
+		t.Fatalf("failed usage = %+v, want the billed length-exhausted attempt", usage)
 	}
 }
 

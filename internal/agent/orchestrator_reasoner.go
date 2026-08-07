@@ -107,7 +107,8 @@ func (o *Orchestrator) runReasonerPhase(ctx context.Context) {
 				modelID = o.reasoningProvider.ModelInfo().Name
 			}
 			var ok bool
-			budgetReservation, ok = o.budget.Reserve(modelID, 2500, 2048)
+			outputAllowance := llm.StructuredOutputTokenLimit(o.reasoningProvider, 3500, 10240)
+			budgetReservation, ok = o.budget.Reserve(modelID, 2500, outputAllowance)
 			if !ok {
 				o.logger.Info("reasoner skipped — insufficient budget headroom",
 					"reasoner", r.Name(), "level", lvl)
@@ -117,7 +118,9 @@ func (o *Orchestrator) runReasonerPhase(ctx context.Context) {
 			}
 		}
 
+		reasonerStarted := time.Now()
 		plans, usage, err := r.Apply(ctx, reasonerEvidence)
+		reasonerDurationMs := time.Since(reasonerStarted).Milliseconds()
 		if budgetReservation != nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
 			budgetReservation.Commit(usage.ModelID, llm.Usage{
 				InputTokens:  usage.InputTokens,
@@ -125,6 +128,20 @@ func (o *Orchestrator) runReasonerPhase(ctx context.Context) {
 			})
 		} else if budgetReservation != nil {
 			budgetReservation.Release()
+		}
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			action := "plan"
+			result := fmt.Sprintf("%d plan(s) returned", len(plans))
+			if err != nil {
+				action = "plan_failed"
+				result = err.Error()
+			}
+			_ = o.db.LogAIWithCost(o.scanID, r.Name(), action,
+				"reasoner planning pass", "", "", result,
+				usage.InputTokens, usage.OutputTokens, reasonerDurationMs,
+				llm.CostMicroCents(usage.ModelID, llm.Usage{
+					InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+				}), usage.ModelID)
 		}
 		usageMeta := map[string]any{
 			"reasoner":      r.Name(),

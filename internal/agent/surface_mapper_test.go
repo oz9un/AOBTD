@@ -27,6 +27,24 @@ func TestSurfaceMapperIgnoresStaticCacheVersionButKeepsApplicationQuery(t *testi
 	}
 }
 
+func TestSurfaceMapperDeprioritizesTelemetryEnvelopeInputs(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		name string
+	}{
+		{"/awe/api/v2/rum", "long_task.scripts[].source_url"},
+		{"/ces/v1/t", "context.page.url"},
+		{"/cdn-cgi/challenge-platform/h/g/jsd/oneshot", "view.url"},
+	} {
+		if !ignoreSurfaceBodyParam(tc.path, tc.name) {
+			t.Fatalf("telemetry input %s %s should be deprioritized", tc.path, tc.name)
+		}
+	}
+	if ignoreSurfaceBodyParam("/api/fetch-preview", "url") {
+		t.Fatal("application URL input must remain visible")
+	}
+}
+
 func TestFlattenSurfaceJSONFindsNestedIdentifiers(t *testing.T) {
 	value := map[string]any{
 		"order": map[string]any{

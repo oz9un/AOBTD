@@ -108,6 +108,53 @@ func TestGetAnalyzedTrafficByEndpointHashExcludesFreshRows(t *testing.T) {
 	}
 }
 
+func TestAcknowledgeEquivalentAnalyzedEvidenceKeepsMaterialChangesQueued(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "analysis-watermark.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, _ := db.CreateScan("https://example.test", `{}`)
+	insert := func(status int, body string) int64 {
+		t.Helper()
+		id, insertErr := db.InsertTraffic(scanID, &types.TrafficEntry{
+			Request: types.CapturedRequest{Method: "GET", URL: "https://example.test/api/me", Headers: map[string]string{}},
+			Response: types.CapturedResponse{
+				StatusCode: status, Headers: map[string]string{}, ContentType: "application/json",
+				Body: []byte(body), Size: int64(len(body)),
+			},
+			Timestamp: time.Now(),
+		})
+		if insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		return id
+	}
+	priorID := insert(200, `{"id":1}`)
+	equivalentID := insert(200, `{"id":1}`)
+	changedID := insert(403, `{"error":"forbidden"}`)
+	if err := db.MarkTrafficAnalyzed([]int64{priorID}, 3); err != nil {
+		t.Fatal(err)
+	}
+	acknowledged, err := db.AcknowledgeEquivalentAnalyzedEvidence(scanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged != 1 {
+		t.Fatalf("acknowledged rows = %d, want 1", acknowledged)
+	}
+	var equivalentAnalyzed, changedAnalyzed bool
+	if err := db.Conn().QueryRow(`SELECT is_ai_analyzed FROM traffic WHERE id = ?`, equivalentID).Scan(&equivalentAnalyzed); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Conn().QueryRow(`SELECT is_ai_analyzed FROM traffic WHERE id = ?`, changedID).Scan(&changedAnalyzed); err != nil {
+		t.Fatal(err)
+	}
+	if !equivalentAnalyzed || changedAnalyzed {
+		t.Fatalf("equivalent analyzed=%v changed analyzed=%v, want true/false", equivalentAnalyzed, changedAnalyzed)
+	}
+}
+
 func TestOpenMigratesTrafficProvenanceColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	legacySchema := schema

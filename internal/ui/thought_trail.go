@@ -272,7 +272,7 @@ func hypothesisEvidenceState(h thoughtTrailHyp) (grade, next string) {
 	case strings.EqualFold(h.Status, store.HypothesisStale):
 		return "retired", "No further work is planned unless new evidence changes the model."
 	case h.TestsPending > 0:
-		return "testing", "Wait for the queued targeted test before revising confidence."
+		return "testing", "Wait for the queued evidence or probe directive before revising confidence."
 	case h.TestsCompleted > 0:
 		return "tested", "Did the result satisfy the business invariant, or should this belief be lowered or retired?"
 	case h.EvidenceCount > 0:
@@ -353,7 +353,7 @@ func thoughtTrailSummary(t thoughtTrail) string {
 		parts = append(parts, fmt.Sprintf("tracking %d active %s", t.Metrics.ActiveHypotheses, hypothesisWord(t.Metrics.ActiveHypotheses)))
 	}
 	if t.Metrics.TargetedTests > 0 {
-		parts = append(parts, fmt.Sprintf("ran or queued %d targeted test%s", t.Metrics.TargetedTests, plural(t.Metrics.TargetedTests)))
+		parts = append(parts, fmt.Sprintf("ran or queued %d targeted directive%s", t.Metrics.TargetedTests, plural(t.Metrics.TargetedTests)))
 	}
 	if t.Metrics.GuardedActions > 0 {
 		parts = append(parts, fmt.Sprintf("held back from %d sensitive action%s", t.Metrics.GuardedActions, plural(t.Metrics.GuardedActions)))

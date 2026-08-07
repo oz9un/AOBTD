@@ -42,6 +42,8 @@ func TestLiveBrowserFleetReportsActiveAndIdleStates(t *testing.T) {
 		"isBlankBrowserImage(probe)",
 		"Blank render withheld · action trail preserved",
 		"heldSamePage ? 'last good' : 'page open'",
+		"availableFrames.filter(frame => frameIsActive(frame) || frameHasImage(frame))",
+		"visibleFrames.length ? visibleFrames : availableFrames.slice(0, 1)",
 		"Browser idle — scan still running",
 		"The crawler is between browser tasks",
 		"else void updateBrowserFrame()",

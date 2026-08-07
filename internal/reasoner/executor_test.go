@@ -282,9 +282,9 @@ func TestExecutorSQLiGenericPivotsToUnionCredentialExfil(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.Contains(q, "FROM sqlite_master"):
-			_, _ = w.Write([]byte(`{"data":[{"name":"CREATE TABLE users (id integer, email text, password text)"}]}`))
+			_, _ = w.Write([]byte(strings.Repeat("schema-prefix-", 80) + `{"data":[{"name":"CREATE TABLE users (id integer, email text, password text)"}]}`))
 		case strings.Contains(q, "FROM users") && strings.Contains(q, "email") && strings.Contains(q, "password"):
-			_, _ = w.Write([]byte(`{"data":[{"name":"admin@example.test","description":"0123456789abcdef0123456789abcdef"}]}`))
+			_, _ = w.Write([]byte(strings.Repeat("credential-prefix-", 80) + `{"data":[{"name":"admin@example.test","description":"0123456789abcdef0123456789abcdef"}]}`))
 		case strings.Contains(q, "AOBTD_UNION_2") && strings.Contains(q, "AOBTD_UNION_3"):
 			_, _ = w.Write([]byte(`{"data":[{"name":"AOBTD_UNION_2","description":"AOBTD_UNION_3"}]}`))
 		case strings.Contains(q, "OR 1=1"):
@@ -327,6 +327,25 @@ func TestExecutorSQLiGenericPivotsToUnionCredentialExfil(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("credential exfil finding count = %d, want 1", count)
 	}
+	var schemaProof, credentialProof string
+	if err := db.Conn().QueryRow(`
+		SELECT poc_response FROM findings
+		WHERE scan_id = ? AND vuln_type = 'sqli_schema_exposure'
+		LIMIT 1`, scanID).Scan(&schemaProof); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(schemaProof, "CREATE TABLE users") {
+		t.Fatalf("schema PoC response dropped the confirming evidence:\n%s", schemaProof)
+	}
+	if err := db.Conn().QueryRow(`
+		SELECT poc_response FROM findings
+		WHERE scan_id = ? AND vuln_type = 'sqli_credential_exfiltration'
+		LIMIT 1`, scanID).Scan(&credentialProof); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(credentialProof, "admin@example.test") {
+		t.Fatalf("credential PoC response dropped the confirming evidence:\n%s", credentialProof)
+	}
 	var poc string
 	if err := db.Conn().QueryRow(`
 		SELECT poc_request FROM findings
@@ -338,6 +357,14 @@ func TestExecutorSQLiGenericPivotsToUnionCredentialExfil(t *testing.T) {
 		!strings.Contains(poc, "q=%27+OR+1%3D1+--+") ||
 		strings.Contains(poc, "{payload=") {
 		t.Fatalf("SQLi PoC should contain the mutated query URL, got:\n%s", poc)
+	}
+}
+
+func TestProofResponseBodyFallsBackToPrefixWithoutKnownMarker(t *testing.T) {
+	body := strings.Repeat("prefix", 100) + "important-tail"
+	got := proofResponseBody("other", []byte(body), 80)
+	if !strings.HasPrefix(got, strings.Repeat("prefix", 10)) || strings.Contains(got, "important-tail") {
+		t.Fatalf("generic proof preview should preserve the response prefix, got %q", got)
 	}
 }
 
@@ -460,6 +487,27 @@ func TestSQLiGenericConfirmationIntrinsicSignals(t *testing.T) {
 	loginShell := []byte(`<html><form><input name="username"><input name="password"></form></html>`)
 	if sqliGenericConfirmationHit(ConfirmationRule{StatusCodes: []int{http.StatusOK}}, resp, loginShell, len(loginShell), loginShell) {
 		t.Fatal("status-only identical login shell should not confirm SQLi")
+	}
+	emptyData := []byte(`{"status":"success","data":[]}`)
+	if sqliGenericConfirmationHit(ConfirmationRule{
+		StatusCodes:  []int{http.StatusOK},
+		BodyContains: []string{"data"},
+	}, resp, emptyData, len(emptyData), emptyData) {
+		t.Fatal("planner marker already present in baseline should not confirm SQLi")
+	}
+	introducedRow := []byte(`{"status":"success","data":[{"email":"admin@example.test"}]}`)
+	if !sqliGenericConfirmationHit(ConfirmationRule{
+		StatusCodes:  []int{http.StatusOK},
+		BodyContains: []string{"admin@example.test"},
+	}, resp, introducedRow, len(emptyData), emptyData) {
+		t.Fatal("new planner-specific response marker should confirm SQLi")
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	if sqliGenericConfirmationHit(ConfirmationRule{
+		StatusCodes:   []int{http.StatusOK},
+		HeaderPresent: []string{"Content-Type"},
+	}, resp, emptyData, len(emptyData), emptyData) {
+		t.Fatal("ordinary response header should not confirm SQLi")
 	}
 }
 

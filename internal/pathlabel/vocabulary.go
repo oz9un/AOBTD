@@ -42,7 +42,7 @@ func (r *resolver) PrimeVocabulary(ctx context.Context, host string, samplePaths
 		SystemPrompt: vocabSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
 		Temperature:  0.1,
-		MaxTokens:    800,
+		MaxTokens:    llm.StructuredOutputTokenLimit(r.provider, 800, 4096),
 		JSONMode:     true,
 	}, 0)
 	if err != nil {
@@ -133,6 +133,15 @@ func parseVocabResponse(content string) (*Vocabulary, error) {
 	for _, candidate := range append([]string(nil), candidates...) {
 		if strings.Contains(candidate, `\"`) {
 			candidates = append(candidates, strings.ReplaceAll(candidate, `\"`, `"`))
+		}
+	}
+	for _, candidate := range append([]string(nil), candidates...) {
+		trimmed := strings.TrimSpace(candidate)
+		// MiniMax occasionally drops only the opening object brace while
+		// preserving the schema's first key and a complete closing brace.
+		// Keep this exact so arbitrary prose cannot become vocabulary.
+		if strings.HasPrefix(trimmed, `"site_type"`) {
+			candidates = append(candidates, "{"+trimmed)
 		}
 	}
 	for _, candidate := range candidates {

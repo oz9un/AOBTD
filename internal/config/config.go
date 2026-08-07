@@ -48,11 +48,23 @@ type ScanConfig struct {
 	MaxDepth         int                     `mapstructure:"max_depth"`
 	MaxPages         int                     `mapstructure:"max_pages"`
 	CrawlTimeout     time.Duration           `mapstructure:"crawl_timeout"`
+	AdaptiveCrawl    bool                    `mapstructure:"adaptive_crawl" json:"adaptive_crawl,omitempty"`
 	Scope            []string                `mapstructure:"scope"` // allowed domains
 	SeedURLs         []string                `mapstructure:"seed_urls" json:"seed_urls,omitempty"`
 	TestingAuthority policy.TestingAuthority `mapstructure:"testing_authority" json:"testing_authority"`
 	PrimaryPersona   PersonaConfig           `mapstructure:"primary_persona" json:"primary_persona,omitempty"`
 	SecondaryPersona PersonaConfig           `mapstructure:"secondary_persona" json:"secondary_persona,omitempty"`
+	Recon            ReconConfig             `mapstructure:"recon" json:"recon,omitempty"`
+}
+
+type ReconConfig struct {
+	Enabled           bool     `mapstructure:"enabled" json:"enabled"`
+	Sources           []string `mapstructure:"sources" json:"sources,omitempty"`
+	IncludeSubdomains bool     `mapstructure:"include_subdomains" json:"include_subdomains,omitempty"`
+	Limit             int      `mapstructure:"limit" json:"limit,omitempty"`
+	DNSEnumeration    bool     `mapstructure:"dns_enumeration" json:"dns_enumeration,omitempty"`
+	ValidateHTTP      bool     `mapstructure:"validate_http" json:"validate_http,omitempty"`
+	VHostEnumeration  bool     `mapstructure:"vhost_enumeration" json:"vhost_enumeration,omitempty"`
 }
 
 // PersonaConfig stores non-secret BOLA context in the persisted scan config.
@@ -96,6 +108,7 @@ func DefaultConfig() *Config {
 			MaxPages:         500,
 			CrawlTimeout:     30 * time.Minute,
 			TestingAuthority: policy.AuthorityActive,
+			Recon:            ReconConfig{Enabled: true, Sources: []string{"wayback", "commoncrawl", "crtsh"}, Limit: 500},
 		},
 		Output: OutputConfig{
 			Dir:    "./aobtd-output",

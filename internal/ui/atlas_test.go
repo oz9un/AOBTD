@@ -306,6 +306,7 @@ func TestFindingDetailCallsOutWeakLegacyAuthProof(t *testing.T) {
 		"function renderFindingVerificationNotes",
 		"Auth success signal:",
 		"HTTP 200 alone is not enough",
+		"Retest should compare the injected response with a benign baseline",
 		"The stored response preview is HTML",
 		"same status and length",
 	} {
@@ -351,6 +352,10 @@ func TestScanStartUIDefaultPathIsPlainAndIncludesDiscoveredSubdomains(t *testing
 		`id="scanIncludeSubdomains" checked`,
 		"Smart discovery (recommended)",
 		"function scanTargetInterpretation()",
+		"function scanHostIsIPLiteral(hostname)",
+		"IP addresses do not have a subdomain boundary",
+		"nm-toggle-card",
+		"nm-option-group",
 		"Google, Gmail, analytics, ads, and other external domains stay out",
 		"AI prioritizes endpoints inside this boundary; it never expands authorization by itself",
 		"Advanced settings",

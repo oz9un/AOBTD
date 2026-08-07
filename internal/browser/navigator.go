@@ -202,20 +202,22 @@ func (n *Navigator) ExecuteAction(ctx context.Context, page *rod.Page, action *N
 func ParseAction(response string) (*NavigatorAction, error) {
 	// Try direct JSON parse
 	var action NavigatorAction
-	if err := json.Unmarshal([]byte(response), &action); err == nil {
+	if err := json.Unmarshal([]byte(response), &action); err == nil && strings.TrimSpace(action.Action) != "" {
 		return &action, nil
 	}
 
 	// Accept the first complete object when a model emits a valid decision
 	// followed by the beginning of a second JSON object.
+	action = NavigatorAction{}
 	decoder := json.NewDecoder(bytes.NewReader([]byte(response)))
-	if err := decoder.Decode(&action); err == nil {
+	if err := decoder.Decode(&action); err == nil && strings.TrimSpace(action.Action) != "" {
 		return &action, nil
 	}
 
 	// Try extracting JSON from mixed content
+	action = NavigatorAction{}
 	cleaned := extractJSONFromText(response)
-	if err := json.Unmarshal([]byte(cleaned), &action); err == nil {
+	if err := json.Unmarshal([]byte(cleaned), &action); err == nil && strings.TrimSpace(action.Action) != "" {
 		return &action, nil
 	}
 
@@ -228,11 +230,24 @@ func ParseAction(response string) (*NavigatorAction, error) {
 	if action, ok := recoverTruncatedNavigateAction(response); ok {
 		return action, nil
 	}
+	// MiniMax can likewise drop only the opening {"action":"click", prefix
+	// while preserving a complete selector and reason. Recover this narrowly
+	// when selector is the very first field. The NavigatorAgent still requires
+	// an exact selector captured from the current DOM and applies its control-
+	// risk/authority checks before execution.
+	if action, ok := recoverDroppedSelectorActionPrefix(response); ok {
+		return action, nil
+	}
 
 	return nil, fmt.Errorf("could not parse action from LLM response")
 }
 
-var navigatorJSONStringFieldRE = regexp.MustCompile(`"([a-z_]+)"\s*:\s*("(?:\\.|[^"\\])*")`)
+var (
+	navigatorJSONStringFieldRE       = regexp.MustCompile(`"([a-z_]+)"\s*:\s*("(?:\\.|[^"\\])*")`)
+	navigatorDroppedNavigatePrefixRE = regexp.MustCompile(`(?i)^\{?\s*"?navigate"\s*,`)
+	navigatorMissingActionKeyRE      = regexp.MustCompile(`(?i)^\{?\s*"?:\s*"navigate"\s*,`)
+	navigatorMissingOpeningQuoteRE   = regexp.MustCompile(`(?i)^\{?\s*action"\s*:\s*"navigate"\s*,`)
+)
 
 func recoverTruncatedNavigateAction(response string) (*NavigatorAction, bool) {
 	fields := make(map[string]string)
@@ -242,17 +257,69 @@ func recoverTruncatedNavigateAction(response string) (*NavigatorAction, bool) {
 			fields[match[1]] = value
 		}
 	}
-	if fields["action"] != "navigate" || fields["url"] == "" {
+	actionName := fields["action"]
+	if actionName == "" && navigatorLooksLikeDroppedNavigatePrefix(response) {
+		actionName = "navigate"
+	}
+	if actionName != "navigate" || fields["url"] == "" {
 		return nil, false
 	}
 	parsed, err := url.Parse(fields["url"])
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return nil, false
 	}
+	reason := strings.TrimSpace(fields["reason"])
+	if reason == "" {
+		reason = "Recovered the completed bounded navigation decision after the optional explanation was truncated."
+	}
 	return &NavigatorAction{
 		Action: "navigate",
 		URL:    fields["url"],
-		Reason: "Recovered the completed bounded navigation decision after the optional explanation was truncated.",
+		Reason: reason,
+	}, true
+}
+
+func navigatorLooksLikeDroppedNavigatePrefix(response string) bool {
+	trimmed := strings.TrimSpace(response)
+	if strings.HasPrefix(trimmed, `"url"`) {
+		return true
+	}
+	return navigatorDroppedNavigatePrefixRE.MatchString(trimmed) ||
+		navigatorMissingActionKeyRE.MatchString(trimmed) ||
+		navigatorMissingOpeningQuoteRE.MatchString(trimmed)
+}
+
+func recoverDroppedSelectorActionPrefix(response string) (*NavigatorAction, bool) {
+	trimmed := strings.TrimSpace(response)
+	if !strings.HasPrefix(trimmed, `"selector"`) &&
+		!strings.HasPrefix(trimmed, `{"selector"`) {
+		return nil, false
+	}
+
+	fields := make(map[string]string)
+	for _, match := range navigatorJSONStringFieldRE.FindAllStringSubmatch(response, -1) {
+		value, err := strconv.Unquote(match[2])
+		if err == nil {
+			fields[match[1]] = value
+		}
+	}
+	selector := strings.TrimSpace(fields["selector"])
+	if selector == "" {
+		return nil, false
+	}
+	actionName := "click"
+	if strings.TrimSpace(fields["value"]) != "" {
+		actionName = "fill"
+	}
+	reason := strings.TrimSpace(fields["reason"])
+	if reason == "" {
+		reason = "Recovered the completed bounded selector decision after its opening action field was dropped."
+	}
+	return &NavigatorAction{
+		Action:   actionName,
+		Selector: selector,
+		Value:    fields["value"],
+		Reason:   reason,
 	}, true
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	scanagent "github.com/ozzyw/aobtd/internal/agent"
 	"github.com/ozzyw/aobtd/internal/ask"
+	"github.com/ozzyw/aobtd/internal/externalrecon"
 	"github.com/ozzyw/aobtd/internal/extract"
 	"github.com/ozzyw/aobtd/internal/llm"
 	"github.com/ozzyw/aobtd/internal/observation"
@@ -166,6 +167,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/discovery-graph", s.handleDiscoveryGraph)
 	mux.HandleFunc("/api/causal-flows", s.handleCausalFlows)
 	mux.HandleFunc("/api/recon-graph", s.handleReconGraph)
+	mux.HandleFunc("/api/recon-assets", s.handleReconAssets)
+	mux.HandleFunc("/api/recon-monitor", s.handleReconMonitor)
 	mux.HandleFunc("/api/ailog", s.handleAILog)
 	mux.HandleFunc("/api/ailog/stats", s.handleAILogStats)
 	mux.HandleFunc("/api/ailog/full", s.handleAILogFull)
@@ -233,6 +236,7 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		server.Close()
 	}()
+	go s.runReconMonitorLoop(ctx)
 
 	s.logger.Info("UI server started", "addr", s.addr)
 	fmt.Printf("\n  AOBTD UI: http://%s\n\n", s.addr)
@@ -284,6 +288,25 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 	testingAuthority := testingAuthorityFromConfig(configJSON)
 	copilotModel := copilotModelFromConfig(configJSON)
+	var scanModelConfig struct {
+		LLM struct {
+			Provider string
+			Model    string
+		}
+	}
+	_ = json.Unmarshal([]byte(configJSON), &scanModelConfig)
+	pipeline := s.scanPipelineState(scanID, status)
+	terminalDetail := ""
+	if status == "incomplete" || status == "failed" || status == "error" {
+		_ = s.db.Conn().QueryRow(`
+			SELECT message
+			FROM narrations
+			WHERE scan_id = ?
+			  AND agent = 'orchestrator'
+			  AND action IN ('incomplete', 'convergence_stopped')
+			ORDER BY id DESC
+			LIMIT 1`, scanID).Scan(&terminalDetail)
+	}
 
 	// Get tech stack from traffic headers
 	var server, framework string
@@ -307,7 +330,72 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		"copilot_provider":     copilotModel.Provider,
 		"copilot_model":        copilotModel.Model,
 		"copilot_model_source": copilotModel.Source,
+		"llm_configured":       strings.TrimSpace(scanModelConfig.LLM.Provider) != "",
+		"llm_provider":         scanModelConfig.LLM.Provider,
+		"llm_model":            scanModelConfig.LLM.Model,
+		"terminal_detail":      terminalDetail,
+		"pipeline":             pipeline,
 	})
+}
+
+func (s *Server) scanPipelineState(scanID int64, status string) map[string]any {
+	phaseDetail := "Waiting to start"
+	phase := "Waiting to start"
+	phaseKey := "waiting"
+	_ = s.db.Conn().QueryRow(`
+		SELECT message FROM narrations
+		WHERE scan_id = ? AND agent = 'orchestrator' AND action = 'phase'
+		ORDER BY id DESC LIMIT 1`, scanID).Scan(&phaseDetail)
+	lowerPhase := strings.ToLower(phaseDetail)
+	switch {
+	case strings.Contains(lowerPhase, "phase 1"):
+		phaseKey = "discovery"
+		phase = "Discovery"
+	case strings.Contains(lowerPhase, "interactive ui"):
+		phaseKey = "navigation"
+		phase = "Interactive navigation"
+	case strings.Contains(lowerPhase, "analysis"):
+		phaseKey = "analysis"
+		phase = "Endpoint analysis"
+	case strings.Contains(lowerPhase, "authentication"):
+		phaseKey = "authentication"
+		phase = "Authentication mapping"
+	case strings.Contains(lowerPhase, "explorer"):
+		phaseKey = "exploration"
+		phase = "Evidence exploration"
+	case strings.Contains(lowerPhase, "verification"):
+		phaseKey = "verification"
+		phase = "Verification"
+	case strings.Contains(lowerPhase, "convergence"):
+		phaseKey = "convergence"
+		phase = "Final convergence"
+	}
+	var streamingStarted int
+	_ = s.db.Conn().QueryRow(`SELECT COUNT(*) FROM narrations WHERE scan_id = ? AND agent = 'orchestrator' AND action = 'streaming_analysis_start'`, scanID).Scan(&streamingStarted)
+	if phaseKey == "discovery" && streamingStarted > 0 {
+		phaseKey = "discovery_analysis"
+		phase = "Discovery + prioritized endpoint analysis"
+	}
+	const threshold = 0.3
+	counts, _ := s.db.GetAnalysisQueueCounts(scanID, threshold)
+	var profiles int
+	var latestProfile string
+	_ = s.db.Conn().QueryRow(`SELECT COUNT(*), COALESCE(MAX(updated_at),'') FROM page_profiles WHERE scan_id = ?`, scanID).Scan(&profiles, &latestProfile)
+	analysisState := "waiting_for_warmup"
+	if streamingStarted > 0 || phaseKey == "analysis" {
+		analysisState = "active"
+	}
+	if strings.ToLower(status) != "running" {
+		analysisState = "finished"
+	} else if counts.Ready == 0 && profiles > 0 {
+		analysisState = "caught_up"
+	}
+	return map[string]any{
+		"phase": phase, "phase_detail": phaseDetail, "phase_key": phaseKey, "analysis_state": analysisState,
+		"analysis_ready": counts.Ready, "analysis_deferred": counts.Deferred,
+		"analysis_completed": counts.Completed, "profiles": profiles,
+		"latest_profile_at": latestProfile,
+	}
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -357,13 +445,30 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	reconUnderstandingScore := 0.0
+	reconTargetsTotal := 0
+	if reconJSON, reconErr := s.db.GetReconModel(scanID); reconErr == nil {
+		var reconStats struct {
+			Metrics struct {
+				UnderstandingScore float64 `json:"understanding_score"`
+				TargetsTotal       int     `json:"targets_total"`
+			} `json:"metrics"`
+		}
+		if json.Unmarshal([]byte(reconJSON), &reconStats) == nil {
+			reconUnderstandingScore = reconStats.Metrics.UnderstandingScore
+			reconTargetsTotal = reconStats.Metrics.TargetsTotal
+		}
+	}
+
 	result := map[string]any{
-		"traffic":           stats,
-		"graph_route_count": graphRouteCount,
-		"narration_count":   narrationCount,
-		"strategy_count":    strategyCount,
-		"changes_count":     changesCount,
-		"ai_log_count":      aiLogCount,
+		"traffic":                   stats,
+		"graph_route_count":         graphRouteCount,
+		"recon_understanding_score": reconUnderstandingScore,
+		"recon_targets_total":       reconTargetsTotal,
+		"narration_count":           narrationCount,
+		"strategy_count":            strategyCount,
+		"changes_count":             changesCount,
+		"ai_log_count":              aiLogCount,
 		"findings": map[string]int{
 			"critical":  critical,
 			"high":      high,
@@ -2980,6 +3085,195 @@ func (s *Server) handleSurface(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]any{"inputs": nil, "summary": nil, "query_routes": queryRoutes, "client_routes": clientRoutes})
 }
 
+func (s *Server) handleReconAssets(w http.ResponseWriter, r *http.Request) {
+	scanID := s.scanIDFromRequest(r)
+	observations, err := s.db.ListReconObservations(scanID, 5000)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	run, err := s.db.LatestReconRun(scanID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	stats := map[string]int{"total": len(observations)}
+	for _, item := range observations {
+		stats[item.State]++
+		stats["source:"+item.Source]++
+		stats["type:"+item.AssetType]++
+	}
+	comparison := map[string]any{"prior_scan_id": int64(0), "new": []string{}, "missing": []string{}, "promoted": []string{}}
+	var priorScanID int64
+	if err := s.db.Conn().QueryRow(`
+		SELECT prior.id FROM scans current
+		JOIN scans prior ON prior.target=current.target AND prior.id<current.id
+		WHERE current.id=? AND EXISTS (SELECT 1 FROM recon_observations ro WHERE ro.scan_id=prior.id)
+		ORDER BY prior.id DESC LIMIT 1`, scanID).Scan(&priorScanID); err == nil && priorScanID > 0 {
+		prior, _ := s.db.ListReconObservations(priorScanID, 5000)
+		currentState := map[string]string{}
+		priorState := map[string]string{}
+		for _, item := range observations {
+			currentState[item.AssetType+"|"+item.Value] = item.State
+		}
+		for _, item := range prior {
+			priorState[item.AssetType+"|"+item.Value] = item.State
+		}
+		newValues, missingValues, promotedValues := []string{}, []string{}, []string{}
+		for key, state := range currentState {
+			previous, existed := priorState[key]
+			value := strings.TrimPrefix(strings.TrimPrefix(key, "url|"), "hostname|")
+			if !existed {
+				newValues = append(newValues, value)
+			} else if state == "confirmed" && previous != "confirmed" {
+				promotedValues = append(promotedValues, value)
+			}
+		}
+		for key := range priorState {
+			if _, exists := currentState[key]; !exists {
+				missingValues = append(missingValues, strings.TrimPrefix(strings.TrimPrefix(key, "url|"), "hostname|"))
+			}
+		}
+		sort.Strings(newValues)
+		sort.Strings(missingValues)
+		sort.Strings(promotedValues)
+		comparison = map[string]any{"prior_scan_id": priorScanID, "new": newValues, "missing": missingValues, "promoted": promotedValues}
+	}
+	jsonResponse(w, map[string]any{"run": run, "observations": observations, "stats": stats, "comparison": comparison})
+}
+
+func (s *Server) handleReconMonitor(w http.ResponseWriter, r *http.Request) {
+	scanID := s.scanIDFromRequest(r)
+	var target string
+	if err := s.db.Conn().QueryRow(`SELECT target FROM scans WHERE id=?`, scanID).Scan(&target); err != nil {
+		jsonError(w, "scan not found", http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		if err := s.db.DisableReconMonitor(target); err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		jsonResponse(w, map[string]any{"disabled": true})
+		return
+	}
+	if r.Method != http.MethodGet {
+		jsonError(w, "GET or DELETE required", http.StatusMethodNotAllowed)
+		return
+	}
+	monitor, err := s.db.GetReconMonitor(target)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jsonResponse(w, map[string]any{"monitor": monitor})
+}
+
+func (s *Server) runReconMonitorLoop(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := s.runDueReconMonitors(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("continuous recon scheduler", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) runDueReconMonitors(ctx context.Context) error {
+	due, err := s.db.ListDueReconMonitors(time.Now(), 4)
+	if err != nil {
+		return err
+	}
+	for _, monitor := range due {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.executeReconMonitor(ctx, monitor)
+	}
+	return nil
+}
+
+func reconMonitorBool(options map[string]any, key string) bool {
+	value, _ := options[key].(bool)
+	return value
+}
+
+func (s *Server) executeReconMonitor(ctx context.Context, monitor store.ReconMonitor) {
+	configJSON, _ := json.Marshal(map[string]any{"Scan": map[string]any{
+		"testing_authority": "recon",
+		"scope":             []string{monitor.Target},
+		"recon": map[string]any{
+			"enabled": true, "sources": monitor.Sources,
+			"include_subdomains": monitor.IncludeSubdomains,
+			"dns_enumeration":    reconMonitorBool(monitor.Options, "dns"),
+			"validate_http":      reconMonitorBool(monitor.Options, "http"),
+			"vhost_enumeration":  reconMonitorBool(monitor.Options, "vhost"),
+		},
+	}})
+	scanID, err := s.db.CreateScan(monitor.Target, string(configJSON))
+	if err != nil {
+		_ = s.db.FinishReconMonitorRun(monitor.ID, 0, err, time.Now().Add(time.Duration(monitor.IntervalMinutes)*time.Minute))
+		return
+	}
+	rules := []string{monitor.Target}
+	if monitor.IncludeSubdomains {
+		if parsed, parseErr := url.Parse(monitor.Target); parseErr == nil {
+			if root, rootErr := targetresolver.RegistrableDomain(monitor.Target); rootErr == nil {
+				rules = append(rules, parsed.Scheme+"://*."+root)
+			}
+		}
+	}
+	engine, policyErr := policy.New(policy.AuthorityRecon, rules)
+	if policyErr != nil {
+		_ = s.db.FinishScan(scanID, "failed")
+		_ = s.db.FinishReconMonitorRun(monitor.ID, scanID, policyErr, time.Now().Add(time.Duration(monitor.IntervalMinutes)*time.Minute))
+		return
+	}
+	runID, err := s.db.StartReconRun(scanID, "enumeraite", monitor.Sources, monitor.Options)
+	if err != nil {
+		_ = s.db.FinishScan(scanID, "failed")
+		_ = s.db.FinishReconMonitorRun(monitor.ID, scanID, err, time.Now().Add(time.Duration(monitor.IntervalMinutes)*time.Minute))
+		return
+	}
+	result, _, runErr := externalrecon.Run(ctx, monitor.Target, externalrecon.Config{
+		Sources: monitor.Sources, IncludeSubdomains: monitor.IncludeSubdomains, Limit: 500,
+		DNSEnumeration:   reconMonitorBool(monitor.Options, "dns"),
+		ValidateHTTP:     reconMonitorBool(monitor.Options, "http"),
+		VHostEnumeration: reconMonitorBool(monitor.Options, "vhost"),
+		Timeout:          90 * time.Second,
+	})
+	if runErr == nil {
+		for _, item := range result.Observations {
+			inScope := item.InScope
+			if item.AssetType == "url" {
+				inScope = inScope && engine.Authorize(policy.Action{TargetURL: item.Value, Method: "GET"}).Allowed
+			}
+			_ = s.db.UpsertReconObservation(scanID, runID, store.ReconObservation{
+				Target: item.Target, AssetType: item.AssetType, Value: item.Value,
+				Source: item.Source, State: item.State, Confidence: item.Confidence,
+				ObservedAt: item.ObservedAt, InScope: inScope, Evidence: item.Evidence,
+			})
+		}
+		status := "complete"
+		if len(result.Errors) > 0 {
+			status = "partial"
+		}
+		_ = s.db.FinishReconRun(runID, status, result.Errors)
+		_ = s.db.FinishScan(scanID, "completed")
+	} else {
+		_ = s.db.FinishReconRun(runID, "failed", []map[string]any{{"source": "enumeraite", "message": runErr.Error()}})
+		_ = s.db.FinishScan(scanID, "failed")
+	}
+	next := time.Now().Add(time.Duration(monitor.IntervalMinutes) * time.Minute)
+	_ = s.db.FinishReconMonitorRun(monitor.ID, scanID, runErr, next)
+	s.logger.Info("continuous recon snapshot finished", "target", monitor.Target, "scan_id", scanID, "next", next, "error", runErr)
+}
+
 type reconQueryRoute struct {
 	Path         string `json:"path"`
 	Parameter    string `json:"parameter"`
@@ -5136,23 +5430,34 @@ func appendTestingAuthorityArg(args []string, authority policy.TestingAuthority)
 	return append(args, "--testing-authority="+string(authority))
 }
 
-// appendUIReconAnalysisLimit keeps browser-visible public Recon runs
-// responsive on asset-heavy sites. Analyzer already orders endpoint families
-// by relevance and runs again after navigation, so a bounded per-pass window
-// preserves representative coverage without spending model calls on hundreds
-// of near-identical fragments before the operator sees a target model.
-func appendUIReconAnalysisLimit(args []string, authority policy.TestingAuthority, maxPages int) []string {
-	if authority != policy.AuthorityRecon {
-		return args
-	}
-	limit := 24
-	if maxPages > 0 {
-		limit = max(8, min(32, maxPages*3))
-		if maxPages <= 3 {
-			limit = 8
+// appendUIScanAnalysisLimit keeps browser-launched scans responsive on
+// asset-heavy SPAs. Analyzer already orders endpoint families by relevance and
+// runs again after Explorer and navigation. Active scans keep the first window
+// deliberately compact so Phase 6 verification cannot sit behind an unbounded
+// endpoint backlog; Recon gets a wider modeling window because it has no
+// active-verification phase to reach.
+func appendUIScanAnalysisLimit(args []string, authority policy.TestingAuthority, maxPages int) []string {
+	limit := 8
+	if authority == policy.AuthorityRecon {
+		limit = 24
+		if maxPages > 0 {
+			limit = max(8, min(32, maxPages*3))
+			if maxPages <= 3 {
+				limit = 8
+			}
 		}
 	}
 	return append(args, "--analysis-endpoint-limit="+strconv.Itoa(limit))
+}
+
+// appendUIAdaptiveCrawlArgs makes the UI's "no page cap" mode adaptive rather
+// than accidentally phase-blocking forever on large public sites. The CLI
+// still exposes a truly unlimited mode with --max-pages=0 --crawl-timeout=0.
+func appendUIAdaptiveCrawlArgs(args []string, maxPages int) []string {
+	if maxPages != 0 {
+		return args
+	}
+	return append(args, "--adaptive-crawl", "--crawl-timeout=8m")
 }
 
 // testingAuthorityFromConfig keeps legacy scans (which predate the field)
@@ -5249,21 +5554,28 @@ func (s *Server) auditPolicyDenial(scanID int64, decision policy.Decision) {
 }
 
 type scanStartRequest struct {
-	Target            string   `json:"target"`
-	MaxPages          int      `json:"max_pages"`
-	IncludeSubdomains bool     `json:"include_subdomains"`
-	Scope             []string `json:"scope"`
-	LLM               string   `json:"llm"`               // "ollama", "openai", "anthropic", "openai-compatible", or "" for crawl-only
-	Model             string   `json:"model"`             // model id (optional — provider default used if empty)
-	ReasoningModel    string   `json:"reasoning_model"`   // optional stronger model for semantic analysis/planning
-	APIKey            string   `json:"api_key"`           // required for openai / anthropic / openai-compatible
-	BaseURL           string   `json:"base_url"`          // optional: openai-compatible endpoint (MiniMax, DeepSeek, self-hosted vLLM, …)
-	BudgetCents       int      `json:"budget_cents"`      // dollar cap in cents; 0 = unlimited
-	SessionCookie     string   `json:"session_cookie"`    // optional: cookie injected into browser before crawl
-	LoginURL          string   `json:"login_url"`         // optional: form-login URL
-	LoginUser         string   `json:"login_user"`        // optional: form-login username
-	LoginPass         string   `json:"login_pass"`        // optional: form-login password
-	TestingAuthority  string   `json:"testing_authority"` // recon, active, or full_control; omitted = active
+	Target                 string   `json:"target"`
+	MaxPages               int      `json:"max_pages"`
+	IncludeSubdomains      bool     `json:"include_subdomains"`
+	Scope                  []string `json:"scope"`
+	LLM                    string   `json:"llm"`               // "ollama", "openai", "anthropic", "openai-compatible", or "" for crawl-only
+	Model                  string   `json:"model"`             // model id (optional — provider default used if empty)
+	ReasoningModel         string   `json:"reasoning_model"`   // optional stronger model for semantic analysis/planning
+	APIKey                 string   `json:"api_key"`           // required for openai / anthropic / openai-compatible
+	BaseURL                string   `json:"base_url"`          // optional: openai-compatible endpoint (MiniMax, DeepSeek, self-hosted vLLM, …)
+	BudgetCents            int      `json:"budget_cents"`      // dollar cap in cents; 0 = unlimited
+	SessionCookie          string   `json:"session_cookie"`    // optional: cookie injected into browser before crawl
+	LoginURL               string   `json:"login_url"`         // optional: form-login URL
+	LoginUser              string   `json:"login_user"`        // optional: form-login username
+	LoginPass              string   `json:"login_pass"`        // optional: form-login password
+	TestingAuthority       string   `json:"testing_authority"` // recon, active, or full_control; omitted = active
+	ExternalRecon          bool     `json:"external_recon"`
+	ReconSources           []string `json:"recon_sources"`
+	ReconLimit             int      `json:"recon_limit"`
+	ReconDNS               bool     `json:"recon_dns"`
+	ReconHTTP              bool     `json:"recon_http"`
+	ReconVHost             bool     `json:"recon_vhost"`
+	ContinuousReconMinutes int      `json:"continuous_recon_minutes"`
 
 	BOLAPrimaryOwner       string `json:"bola_primary_owner"`
 	BOLAPrimaryLoginURL    string `json:"bola_primary_login_url"`
@@ -5383,7 +5695,7 @@ func validateRequestedScope(target string, includeSubdomains bool, extra []strin
 		return fmt.Errorf("target must be a reachable start URL without wildcards; add %q as an authorized scope rule instead", parsed.Hostname())
 	}
 	rules := []string{target}
-	if includeSubdomains {
+	if includeSubdomains && !targetresolver.IsIPLiteral(target) {
 		root, rootErr := targetresolver.RegistrableDomain(target)
 		if rootErr != nil {
 			return rootErr
@@ -5417,6 +5729,9 @@ func normalizeScanStartTarget(req *scanStartRequest) error {
 		return err
 	}
 	req.Target = declared.Target
+	if targetresolver.IsIPLiteral(req.Target) {
+		req.IncludeSubdomains = false
+	}
 	if !declared.WasWildcard {
 		return nil
 	}
@@ -5459,14 +5774,31 @@ func (s *Server) handleScanStart(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "invalid scope: "+err.Error(), 400)
 		return
 	}
-	// 0 → unlimited (the crawler treats MaxPages==0 as "no cap").
-	// Negative values normalize to 0. Clamp huge numbers to a sane ceiling
+	// 0 selects adaptive breadth for UI scans: no page-count cap, with novelty
+	// convergence and a time ceiling added to the subprocess below. Negative
+	// values normalize to 0. Clamp huge numbers to a sane ceiling
 	// so a stray test doesn't try to crawl a million pages by mistake.
 	if req.MaxPages < 0 {
 		req.MaxPages = 0
 	}
 	if req.MaxPages > 50000 {
 		req.MaxPages = 50000
+	}
+	if req.ContinuousReconMinutes != 0 && req.ContinuousReconMinutes < 15 {
+		jsonError(w, "continuous recon interval must be at least 15 minutes", http.StatusBadRequest)
+		return
+	}
+	if req.ContinuousReconMinutes > 10080 {
+		jsonError(w, "continuous recon interval cannot exceed 7 days", http.StatusBadRequest)
+		return
+	}
+	if req.ExternalRecon && len(req.ReconSources) == 0 {
+		jsonError(w, "select at least one external recon source", http.StatusBadRequest)
+		return
+	}
+	if req.ReconVHost && (!req.ExternalRecon || !req.IncludeSubdomains) {
+		jsonError(w, "vhost enumeration requires external recon and Smart discovery scope", http.StatusBadRequest)
+		return
 	}
 	loadUIDotEnvLocal(".env.local")
 	// openai-compatible providers need a base URL too (MiniMax, DeepSeek,
@@ -5516,13 +5848,40 @@ func (s *Server) handleScanStart(w http.ResponseWriter, r *http.Request) {
 	if req.IncludeSubdomains {
 		args = append(args, "--include-subdomains")
 	}
+	args = append(args, "--external-recon="+strconv.FormatBool(req.ExternalRecon))
+	if req.ReconLimit <= 0 {
+		req.ReconLimit = 500
+	}
+	if req.ReconLimit > 10000 {
+		req.ReconLimit = 10000
+	}
+	args = append(args, "--recon-limit", strconv.Itoa(req.ReconLimit))
+	allowedReconSources := map[string]bool{"wayback": true, "commoncrawl": true, "crtsh": true, "google": true}
+	for _, source := range req.ReconSources {
+		source = strings.ToLower(strings.TrimSpace(source))
+		if !allowedReconSources[source] {
+			jsonError(w, "invalid recon source: "+source, http.StatusBadRequest)
+			return
+		}
+		args = append(args, "--recon-source", source)
+	}
+	if req.ReconDNS {
+		args = append(args, "--recon-dns")
+	}
+	if req.ReconHTTP {
+		args = append(args, "--recon-http")
+	}
+	if req.ReconVHost {
+		args = append(args, "--recon-vhost")
+	}
 	for _, scopeEntry := range req.Scope {
 		if scopeEntry = strings.TrimSpace(scopeEntry); scopeEntry != "" {
 			args = append(args, "--scope", scopeEntry)
 		}
 	}
 	args = appendTestingAuthorityArg(args, testingAuthority)
-	args = appendUIReconAnalysisLimit(args, testingAuthority, req.MaxPages)
+	args = appendUIScanAnalysisLimit(args, testingAuthority, req.MaxPages)
+	args = appendUIAdaptiveCrawlArgs(args, req.MaxPages)
 	if req.LLM != "" {
 		args = append(args, "--llm="+req.LLM)
 	}
@@ -5603,6 +5962,17 @@ func (s *Server) handleScanStart(w http.ResponseWriter, r *http.Request) {
 		PID:              cmd.Process.Pid,
 		Authenticated:    req.SessionCookie != "" || (req.LoginURL != "" && req.LoginUser != "" && req.LoginPass != ""),
 		MaxIDBefore:      maxIDBefore,
+	}
+	if req.ContinuousReconMinutes > 0 {
+		monitorErr := s.db.UpsertReconMonitor(store.ReconMonitor{
+			Target: req.Target, Enabled: true, IntervalMinutes: req.ContinuousReconMinutes,
+			IncludeSubdomains: req.IncludeSubdomains, Sources: append([]string(nil), req.ReconSources...),
+			Options:   map[string]any{"dns": req.ReconDNS, "http": req.ReconHTTP, "vhost": req.ReconVHost},
+			NextRunAt: time.Now().UTC().Add(time.Duration(req.ContinuousReconMinutes) * time.Minute).Format(time.RFC3339),
+		})
+		if monitorErr != nil {
+			s.logger.Warn("persist continuous recon monitor", "error", monitorErr)
+		}
 	}
 	s.logger.Info("scan started from UI",
 		"target", req.Target, "pid", cmd.Process.Pid, "max_id_before", maxIDBefore,

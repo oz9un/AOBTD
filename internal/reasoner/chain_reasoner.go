@@ -66,13 +66,13 @@ func (r *ChainReasoner) Apply(ctx context.Context, ev Evidence) ([]ProbePlan, Re
 			{Role: "user", Content: userMessage},
 		},
 		Temperature: 0.3, // slightly higher — creative chain composition
-		MaxTokens:   3500,
+		MaxTokens:   llm.StructuredOutputTokenLimit(r.llm, 3500, 10240),
 		JSONMode:    true,
 	}
 
 	resp, err := r.llm.Complete(ctx, req)
 	if err != nil {
-		return nil, ReasonerUsage{}, fmt.Errorf("chain reasoner LLM: %w", err)
+		return nil, reasonerUsageFromError(err, r.llm), fmt.Errorf("chain reasoner LLM: %w", err)
 	}
 	usage := ReasonerUsage{
 		InputTokens:  resp.Usage.InputTokens,
