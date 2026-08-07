@@ -817,6 +817,61 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_changes_unique
     ON asset_changes(scan_id, prev_scan_id, url);
 CREATE INDEX IF NOT EXISTS idx_asset_changes_scan ON asset_changes(scan_id);
 
+-- recon_runs and recon_observations preserve external discovery provenance.
+-- Historical/candidate rows are intentionally separate from browser traffic:
+-- an archived URL or certificate name is evidence of prior existence, not
+-- proof that the asset is reachable today.
+CREATE TABLE IF NOT EXISTS recon_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id       INTEGER NOT NULL REFERENCES scans(id),
+    engine        TEXT NOT NULL DEFAULT 'enumeraite',
+    sources_json  TEXT NOT NULL DEFAULT '[]',
+    options_json  TEXT NOT NULL DEFAULT '{}',
+    status        TEXT NOT NULL DEFAULT 'running',
+    errors_json   TEXT NOT NULL DEFAULT '[]',
+    started_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+    finished_at   DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_recon_runs_scan ON recon_runs(scan_id, id);
+
+CREATE TABLE IF NOT EXISTS recon_observations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id       INTEGER NOT NULL REFERENCES scans(id),
+    run_id        INTEGER NOT NULL REFERENCES recon_runs(id),
+    target        TEXT NOT NULL,
+    asset_type    TEXT NOT NULL,
+    value         TEXT NOT NULL,
+    source        TEXT NOT NULL,
+    state         TEXT NOT NULL,
+    confidence    REAL NOT NULL DEFAULT 0,
+    observed_at   TEXT DEFAULT '',
+    in_scope      BOOLEAN NOT NULL DEFAULT FALSE,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at    DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(scan_id, source, asset_type, value)
+);
+CREATE INDEX IF NOT EXISTS idx_recon_observations_scan
+    ON recon_observations(scan_id, state, source, asset_type);
+CREATE INDEX IF NOT EXISTS idx_recon_observations_value
+    ON recon_observations(value);
+
+CREATE TABLE IF NOT EXISTS recon_monitors (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    target             TEXT NOT NULL UNIQUE,
+    enabled            BOOLEAN NOT NULL DEFAULT TRUE,
+    interval_minutes   INTEGER NOT NULL DEFAULT 360,
+    include_subdomains BOOLEAN NOT NULL DEFAULT TRUE,
+    sources_json       TEXT NOT NULL DEFAULT '["wayback","commoncrawl","crtsh"]',
+    options_json       TEXT NOT NULL DEFAULT '{}',
+    last_scan_id       INTEGER NOT NULL DEFAULT 0,
+    last_run_at        TEXT DEFAULT '',
+    next_run_at        TEXT NOT NULL,
+    last_error         TEXT DEFAULT '',
+    created_at         DATETIME NOT NULL DEFAULT (datetime('now')),
+    updated_at         DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_recon_monitors_due ON recon_monitors(enabled, next_run_at);
+
 -- url_discoveries: the discovery graph. Each row is an edge "source URL led
 -- us to this target URL via some mechanism". The Referer header is too
 -- unreliable for provenance (cross-origin navs strip it, top-level crawler

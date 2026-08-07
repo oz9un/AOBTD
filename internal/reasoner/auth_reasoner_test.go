@@ -420,6 +420,8 @@ func TestParsePlans(t *testing.T) {
 		{"empty object abstention", `{}`, 0},
 		{"single plan object", single, 1},
 		{"single plan object with prose", "Here is the highest-value plan:\n" + single + "\nDone.", 1},
+		{"dropped single-plan opening brace", strings.TrimPrefix(single, "{"), 1},
+		{"dropped plan-array opening bytes", strings.TrimPrefix(bare, "[{"), 1},
 		{"indexed object", `{"[0]":` + single + `}`, 1},
 		{"brackets inside strings", strings.Replace(bare, `"a:b"`, `"a:[b]"`, 1) + ` trailing [example]`, 1},
 		{"empty array", "[]", 0},

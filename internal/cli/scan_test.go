@@ -146,6 +146,19 @@ func TestResolveScanScopeKeepsDefaultExact(t *testing.T) {
 	}
 }
 
+func TestResolveScanScopeKeepsIPLiteralExact(t *testing.T) {
+	policyScope, crawlScope, err := resolveScanScope("http://127.0.0.1:4280/app", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(policyScope, []string{"http://127.0.0.1:4280/app"}) {
+		t.Fatalf("policy scope = %#v", policyScope)
+	}
+	if !reflect.DeepEqual(crawlScope, []string{"127.0.0.1"}) {
+		t.Fatalf("crawl scope = %#v", crawlScope)
+	}
+}
+
 func TestResolveScanScopeRejectsWildcardTarget(t *testing.T) {
 	_, _, err := resolveScanScope("https://*.example.com", true, nil)
 	if err == nil || !strings.Contains(err.Error(), "not a wildcard") {
@@ -188,6 +201,28 @@ func TestScanHasPreconfiguredAuth(t *testing.T) {
 	}
 	if scanHasPreconfiguredAuth(scanOpts{loginURL: "https://app.example.test/login", loginUser: "alice"}) {
 		t.Fatal("incomplete login credentials should not count as preconfigured auth")
+	}
+}
+
+func TestExternalReconTargetEligibleSkipsLocalAndReservedTargets(t *testing.T) {
+	tests := []struct {
+		target string
+		want   bool
+	}{
+		{target: "http://127.0.0.1:4280/index.php", want: false},
+		{target: "http://[::1]:8080/", want: false},
+		{target: "http://10.0.0.5/", want: false},
+		{target: "https://app.internal.test/", want: false},
+		{target: "https://demo.localhost/", want: false},
+		{target: "https://app.example.com/", want: true},
+		{target: "https://8.8.8.8/", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			if got := externalReconTargetEligible(tt.target); got != tt.want {
+				t.Fatalf("externalReconTargetEligible(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -1315,7 +1315,7 @@ Respond with JSON only.`,
 		SystemPrompt: prompts.NavigatorSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
 		Temperature:  0.1,
-		MaxTokens:    1024,
+		MaxTokens:    llm.StructuredOutputTokenLimit(a.provider, 1024, 4096),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, a.provider, a.budget, req, 0)

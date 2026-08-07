@@ -54,7 +54,7 @@ func TestReconReconcilesContradictoryAPIServiceBadge(t *testing.T) {
 		"function rcReconciledAppType",
 		"normalized !== 'api service'",
 		"summaryDescribesUI && observedUIPage ? 'web application' : normalized",
-		"const displayedAppType = rcReconciledAppType(appType, recon, identitySummary)",
+		"const displayedAppType = rcReconciledAppType(appType, recon, rawIdentitySummary)",
 		"displayedAppType ? `<span class=\"rc-app-type\">",
 	} {
 		if !strings.Contains(html, contract) {

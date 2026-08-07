@@ -110,6 +110,20 @@ type Crawler struct {
 	// generally re-visits the same index.html. LLM-Guided Navigation picks
 	// up from here.
 	spaDetected bool
+
+	// Adaptive convergence is opt-in. UI-launched "no page cap" scans use it
+	// to stop after the observed surface stops changing, while CLI callers can
+	// leave it disabled for a truly unlimited crawl.
+	adaptiveEnabled         bool
+	adaptiveMinPages        int
+	adaptiveStagnationPages int
+	adaptiveMaxDuration     time.Duration
+	adaptiveStartedAt       time.Time
+	adaptiveStalePages      int
+	adaptiveSeenShapes      map[string]bool
+	adaptiveSeenTemplates   map[string]bool
+	adaptiveSeenForms       map[string]bool
+	adaptiveStopReason      string
 }
 
 // SaturationEvent fires the first time a URL shape saturates. The agent layer
@@ -155,7 +169,34 @@ func NewCrawler(ctrl *Controller, scope []string, maxDepth, maxPages int, timeou
 		maxConcurrency:        3,
 		outputDir:             outputDir,
 		screenshotted:         make(map[string]bool),
+		adaptiveSeenShapes:    make(map[string]bool),
+		adaptiveSeenTemplates: make(map[string]bool),
+		adaptiveSeenForms:     make(map[string]bool),
 	}
+}
+
+// EnableAdaptiveConvergence turns an otherwise unbounded crawl into a
+// novelty-bounded one. A zero maxDuration keeps only the novelty rule.
+func (c *Crawler) EnableAdaptiveConvergence(maxDuration time.Duration, minPages, stagnationPages int) {
+	if minPages < 1 {
+		minPages = 20
+	}
+	if stagnationPages < 1 {
+		stagnationPages = 12
+	}
+	c.mu.Lock()
+	c.adaptiveEnabled = true
+	c.adaptiveMaxDuration = maxDuration
+	c.adaptiveMinPages = minPages
+	c.adaptiveStagnationPages = stagnationPages
+	c.mu.Unlock()
+}
+
+// AdaptiveStopReason explains a graceful novelty/time convergence stop.
+func (c *Crawler) AdaptiveStopReason() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.adaptiveStopReason
 }
 
 // OnResult sets a callback for each crawled page.
@@ -175,6 +216,9 @@ func (c *Crawler) Crawl(ctx context.Context, startURL string) ([]CrawlResult, er
 	defer endProvenance()
 
 	start := normalizeURL(startURL)
+	c.mu.Lock()
+	c.adaptiveStartedAt = time.Now()
+	c.mu.Unlock()
 	c.queue = append(c.queue, crawlItem{url: start, depth: 0})
 	c.queued[start] = true
 	parallelism := c.maxConcurrency
@@ -200,6 +244,9 @@ crawlLoop:
 		default:
 		}
 		if c.maxPages > 0 && len(c.results) >= c.maxPages {
+			break crawlLoop
+		}
+		if c.adaptiveTimeLimitReached() {
 			break crawlLoop
 		}
 
@@ -261,6 +308,7 @@ crawlLoop:
 			outcomes[outcome.index] = outcome
 		}
 
+		adaptiveStop := false
 		for _, outcome := range outcomes {
 			if outcome.err != nil {
 				c.logger.Warn("crawl error", "url", outcome.work.item.url, "error", outcome.err)
@@ -275,6 +323,9 @@ crawlLoop:
 				c.callback(result)
 			}
 			c.recordShapeVisit(outcome.work.shape, outcome.work.item.url, result.TemplateHash)
+			if c.observeAdaptiveNovelty(result, outcome.work.shape) {
+				adaptiveStop = true
+			}
 			c.logger.Info("crawled page", "url", outcome.work.item.url,
 				"links", len(result.Links), "forms", len(result.Forms),
 				"depth", outcome.work.item.depth, "total", total)
@@ -297,10 +348,60 @@ crawlLoop:
 				c.queue = append(c.queue, crawlItem{url: normalized, depth: outcome.work.item.depth + 1})
 			}
 		}
+		if adaptiveStop {
+			break crawlLoop
+		}
 	}
 
 	c.logger.Info("crawl complete", "pages_visited", len(c.results))
 	return c.results, nil
+}
+
+// observeAdaptiveNovelty returns true after a sufficiently broad sample has
+// produced no new page/link shapes, response templates, or form actions for
+// the configured number of consecutive pages.
+func (c *Crawler) observeAdaptiveNovelty(result CrawlResult, pageShape string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.adaptiveEnabled {
+		return false
+	}
+	novel := false
+	remember := func(seen map[string]bool, key string) {
+		key = strings.TrimSpace(key)
+		if key != "" && !seen[key] {
+			seen[key] = true
+			novel = true
+		}
+	}
+	remember(c.adaptiveSeenShapes, pageShape)
+	remember(c.adaptiveSeenTemplates, result.TemplateHash)
+	for _, form := range result.Forms {
+		remember(c.adaptiveSeenForms, strings.ToUpper(strings.TrimSpace(form.Method))+" "+strings.TrimSpace(form.Action))
+	}
+	for _, link := range result.Links {
+		remember(c.adaptiveSeenShapes, urlShape(link))
+	}
+	if novel {
+		c.adaptiveStalePages = 0
+	} else {
+		c.adaptiveStalePages++
+	}
+	if len(c.results) < c.adaptiveMinPages || c.adaptiveStalePages < c.adaptiveStagnationPages {
+		return false
+	}
+	c.adaptiveStopReason = fmt.Sprintf("surface converged after %d pages: the last %d pages added no new route shape, response template, or form action", len(c.results), c.adaptiveStalePages)
+	return true
+}
+
+func (c *Crawler) adaptiveTimeLimitReached() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.adaptiveEnabled || c.adaptiveMaxDuration <= 0 || c.adaptiveStartedAt.IsZero() || time.Since(c.adaptiveStartedAt) < c.adaptiveMaxDuration {
+		return false
+	}
+	c.adaptiveStopReason = fmt.Sprintf("adaptive crawl time limit reached after %s", c.adaptiveMaxDuration.Round(time.Second))
+	return true
 }
 
 // Visited returns the number of pages visited so far.

@@ -84,13 +84,38 @@ func (db *DB) GetAILog(scanID int64, limit int) ([]AILogEntry, error) {
 	}
 
 	rows, err := db.conn.Query(`
+		WITH entries AS (
+			SELECT id, agent, action, detail, from_url, to_url, result,
+			       COALESCE(tokens_in, 0) AS tokens_in,
+			       COALESCE(tokens_out, 0) AS tokens_out,
+			       COALESCE(duration_ms, 0) AS duration_ms,
+			       COALESCE(cost_ucents, 0) AS cost_ucents,
+			       COALESCE(model_id, '') AS model_id,
+			       created_at
+			FROM ai_log WHERE scan_id = ?
+			UNION ALL
+			SELECT -sc.id, 'strategist', 'plan_failed',
+			       'failed strategist cycle (' || sc.trigger_reason || ')',
+			       '', '', sc.error, sc.tokens_in, sc.tokens_out,
+			       sc.duration_ms, sc.cost_ucents, sc.model_id, sc.created_at
+			FROM strategist_cycles sc
+			WHERE sc.scan_id = ? AND sc.error != ''
+			  AND NOT EXISTS (
+				SELECT 1 FROM ai_log al
+				WHERE al.scan_id = sc.scan_id
+				  AND al.agent = 'strategist'
+				  AND al.action = 'plan_failed'
+				  AND al.result = sc.error
+				  AND al.model_id = sc.model_id
+				  AND ABS(strftime('%s', al.created_at) - strftime('%s', sc.created_at)) <= 2
+			  )
+		)
 		SELECT id, agent, action, detail, from_url, to_url, result,
-		       COALESCE(tokens_in, 0), COALESCE(tokens_out, 0), COALESCE(duration_ms, 0),
-		       COALESCE(cost_ucents, 0), COALESCE(model_id, ''),
+		       tokens_in, tokens_out, duration_ms, cost_ucents, model_id,
 		       created_at
-		FROM ai_log WHERE scan_id = ?
+		FROM entries
 		ORDER BY created_at ASC, id ASC
-		LIMIT ?`, scanID, limit)
+		LIMIT ?`, scanID, scanID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query ai_log: %w", err)
 	}
@@ -112,25 +137,62 @@ func (db *DB) GetAILog(scanID int64, limit int) ([]AILogEntry, error) {
 // GetAILogStats returns aggregate token usage and cost for a scan.
 func (db *DB) GetAILogStats(scanID int64) (totalIn, totalOut int, totalDurationMs int64, callCount int, totalCostUcents int64, err error) {
 	err = db.conn.QueryRow(`
+		WITH model_calls AS (
+			SELECT tokens_in, tokens_out, duration_ms, cost_ucents
+			FROM ai_log
+			WHERE scan_id = ? AND (tokens_in > 0 OR tokens_out > 0)
+			UNION ALL
+			SELECT sc.tokens_in, sc.tokens_out, sc.duration_ms, sc.cost_ucents
+			FROM strategist_cycles sc
+			WHERE sc.scan_id = ? AND sc.error != ''
+			  AND NOT EXISTS (
+				SELECT 1 FROM ai_log al
+				WHERE al.scan_id = sc.scan_id
+				  AND al.agent = 'strategist'
+				  AND al.action = 'plan_failed'
+				  AND al.result = sc.error
+				  AND al.model_id = sc.model_id
+				  AND ABS(strftime('%s', al.created_at) - strftime('%s', sc.created_at)) <= 2
+			  )
+		)
 		SELECT COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0),
 		       COALESCE(SUM(duration_ms),0), COUNT(*),
 		       COALESCE(SUM(cost_ucents),0)
-		FROM ai_log WHERE scan_id = ? AND tokens_in > 0`, scanID,
+		FROM model_calls`, scanID, scanID,
 	).Scan(&totalIn, &totalOut, &totalDurationMs, &callCount, &totalCostUcents)
 	return
 }
 
 // GetAILogPhaseStats returns model-backed calls grouped by agent and sorted by
-// total compute time. Non-model audit rows have tokens_in=0 and stay out of the
-// performance attribution just as they do in GetAILogStats.
+// total compute time. Non-model audit rows have no input or output tokens and
+// stay out of performance attribution. Output-only failed completions remain
+// visible because reasoning providers can report billed completion usage even
+// when prompt usage is missing.
 func (db *DB) GetAILogPhaseStats(scanID int64) ([]AILogPhaseStat, error) {
 	rows, err := db.conn.Query(`
+		WITH model_calls AS (
+			SELECT agent, tokens_in, tokens_out, duration_ms
+			FROM ai_log
+			WHERE scan_id = ? AND (tokens_in > 0 OR tokens_out > 0)
+			UNION ALL
+			SELECT 'strategist', sc.tokens_in, sc.tokens_out, sc.duration_ms
+			FROM strategist_cycles sc
+			WHERE sc.scan_id = ? AND sc.error != ''
+			  AND NOT EXISTS (
+				SELECT 1 FROM ai_log al
+				WHERE al.scan_id = sc.scan_id
+				  AND al.agent = 'strategist'
+				  AND al.action = 'plan_failed'
+				  AND al.result = sc.error
+				  AND al.model_id = sc.model_id
+				  AND ABS(strftime('%s', al.created_at) - strftime('%s', sc.created_at)) <= 2
+			  )
+		)
 		SELECT agent, COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
 		       COALESCE(SUM(duration_ms), 0)
-		FROM ai_log
-		WHERE scan_id = ? AND tokens_in > 0
+		FROM model_calls
 		GROUP BY agent
-		ORDER BY SUM(duration_ms) DESC, COUNT(*) DESC, agent ASC`, scanID)
+		ORDER BY SUM(duration_ms) DESC, COUNT(*) DESC, agent ASC`, scanID, scanID)
 	if err != nil {
 		return nil, fmt.Errorf("query ai_log phase stats: %w", err)
 	}

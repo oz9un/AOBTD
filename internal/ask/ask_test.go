@@ -66,6 +66,18 @@ func TestCopilotAllowsMiniMaxReasoningRoomWithoutExpandingLoop(t *testing.T) {
 	}
 }
 
+func TestCopilotInputInventoryUsesCapturedHeadersWithoutLiveReplay(t *testing.T) {
+	for _, required := range []string{
+		"traffic.request_headers",
+		"A read-only inventory of already captured headers never requires a live replay",
+		"distinguish browser/SDK-injected fields from user-typed controls",
+	} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Fatalf("Copilot input-inventory guidance missing %q", required)
+		}
+	}
+}
+
 func TestParseActionFindsValidObjectAfterDamagedFragment(t *testing.T) {
 	got := parseAction(`": "query", "sql": "SELECT missing FROM endpoints"}
 {"action":"answer","text":"Recovered from the complete object."}`)

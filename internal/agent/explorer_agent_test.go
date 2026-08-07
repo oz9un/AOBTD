@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -17,6 +18,48 @@ import (
 	"github.com/ozzyw/aobtd/internal/store"
 	"github.com/ozzyw/aobtd/pkg/types"
 )
+
+func TestExplorerStoresFileInclusionSourceDisclosureFromProbeParam(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "explorer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, err := db.CreateScan("https://example.test", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explorer := &ExplorerAgent{
+		db:     db,
+		scanID: scanID,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	body := []byte(base64.StdEncoding.EncodeToString([]byte("<?php\ninclude($_GET['page']);\nini_get('allow_url_include');\n")))
+	resp := &http.Response{StatusCode: 200, Header: make(http.Header)}
+	resp.Header.Set("Content-Type", "text/html; charset=utf-8")
+	task := store.FollowUp{
+		URL:    "https://example.test/vulnerabilities/fi/",
+		Action: "probe_param",
+		Reason: "Test for Local File Inclusion by manipulating the page parameter",
+	}
+	rawURL := "https://example.test/vulnerabilities/fi/?page=php%3A%2F%2Ffilter%2Fconvert.base64-encode%2Fresource%3Dinclude.php"
+	explorer.maybeStoreFileInclusionSourceDisclosureFinding(task, "page", http.MethodGet, rawURL, "php://filter/convert.base64-encode/resource=include.php", nil, resp, body)
+
+	var vulnType, confidence, pocRequest string
+	if err := db.Conn().QueryRow(`
+		SELECT vuln_type, confidence, poc_request
+		FROM findings
+		WHERE scan_id = ? AND vuln_type = 'file_inclusion'
+		LIMIT 1`, scanID).Scan(&vulnType, &confidence, &pocRequest); err != nil {
+		t.Fatalf("file inclusion finding not stored: %v", err)
+	}
+	if vulnType != "file_inclusion" || confidence != string(types.ConfidenceConfirmed) {
+		t.Fatalf("finding = (%q,%q), want confirmed file_inclusion", vulnType, confidence)
+	}
+	if !strings.Contains(pocRequest, "php%3A%2F%2Ffilter") {
+		t.Fatalf("PoC request missing php-filter payload: %s", pocRequest)
+	}
+}
 
 func TestExplorerEscapePathSegmentPayloadAvoidsDoubleEncoding(t *testing.T) {
 	payload := `%3Ciframe%20src%3D%22javascript%3Aalert%28%60xss%60%29%22%3E`

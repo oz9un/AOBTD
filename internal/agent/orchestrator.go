@@ -58,6 +58,8 @@ type Orchestrator struct {
 	// Config
 	maxDepth              int
 	maxPages              int
+	crawlTimeout          time.Duration
+	adaptiveCrawl         bool
 	seedURLs              []string
 	analysisEndpointLimit int
 
@@ -98,8 +100,13 @@ type OrchestratorConfig struct {
 	ScanID   int64
 	MaxDepth int
 	MaxPages int
-	SeedURLs []string
-	Scope    []string // crawler host/domain roots; empty = derive from target
+	// CrawlTimeout is the outer discovery ceiling. Zero is explicitly
+	// unlimited. AdaptiveCrawl adds a graceful novelty-based stop for broad
+	// UI scans without changing that CLI contract.
+	CrawlTimeout  time.Duration
+	AdaptiveCrawl bool
+	SeedURLs      []string
+	Scope         []string // crawler host/domain roots; empty = derive from target
 	// AnalysisEndpointLimit bounds per-pass Analyzer endpoint families. Zero
 	// keeps normal unlimited behavior.
 	AnalysisEndpointLimit int
@@ -215,6 +222,8 @@ func NewOrchestrator(
 		bolaPersonas:           cfg.BOLAPersonas,
 		maxDepth:               cfg.MaxDepth,
 		maxPages:               cfg.MaxPages,
+		crawlTimeout:           cfg.CrawlTimeout,
+		adaptiveCrawl:          cfg.AdaptiveCrawl,
 		seedURLs:               append([]string(nil), cfg.SeedURLs...),
 		analysisEndpointLimit:  cfg.AnalysisEndpointLimit,
 		finalConvergenceRounds: defaultFinalConvergenceRounds,
@@ -624,7 +633,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		"Phase 1: Discovery — crawling the target to map out pages, forms, and API calls.",
 		o.target, nil)
 
-	if err := o.runDiscovery(ctx); err != nil {
+	if err := o.runDiscoveryWithStreamingAnalysis(ctx); err != nil {
 		if ctx.Err() != nil {
 			o.logger.Info("scan interrupted during discovery")
 		} else {
@@ -1451,6 +1460,120 @@ func (o *Orchestrator) convergenceStoppedWithCounts(round int, reason string, pe
 	return err
 }
 
+const (
+	discoveryAnalysisWarmupEndpoints = 12
+	discoveryAnalysisWarmup          = 15 * time.Second
+	discoveryAnalysisPeriod          = 20 * time.Second
+	discoveryAnalysisEndpointDelta   = 10
+	discoveryAnalysisBatchSize       = 4
+	discoveryAnalysisUnlimitedCap    = 24
+)
+
+// runDiscoveryWithStreamingAnalysis turns the formerly phase-gated discovery
+// pass into a producer/consumer pipeline. The crawler remains the sole browser
+// driver; a single sequential analyzer periodically consumes immutable DB
+// snapshots after a small warm-up. When discovery ends we stop admitting new
+// streaming batches and wait for the current one before the ordinary
+// post-discovery reconciliation pass takes ownership.
+func (o *Orchestrator) runDiscoveryWithStreamingAnalysis(ctx context.Context) error {
+	if o.provider == nil || o.budget == nil {
+		return o.runDiscovery(ctx)
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		o.runDiscoveryAnalysisWorker(ctx, stop)
+	}()
+	err := o.runDiscovery(ctx)
+	close(stop)
+	<-done
+	return err
+}
+
+func (o *Orchestrator) runDiscoveryAnalysisWorker(ctx context.Context, stop <-chan struct{}) {
+	startedAt := time.Now()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	lastPass := time.Time{}
+	lastEndpointCount := 0
+	processed := 0
+	limit := o.analysisEndpointLimit
+	if limit <= 0 {
+		limit = discoveryAnalysisUnlimitedCap
+	}
+	announced := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		stats, err := o.db.GetTrafficStats(o.scanID)
+		if err != nil || stats.Total == 0 {
+			continue
+		}
+		warmed := stats.UniqueEndpoints >= discoveryAnalysisWarmupEndpoints || time.Since(startedAt) >= discoveryAnalysisWarmup
+		if !warmed || processed >= limit || o.budget.Level() == llm.BudgetExhausted {
+			continue
+		}
+		if !lastPass.IsZero() && stats.UniqueEndpoints-lastEndpointCount < discoveryAnalysisEndpointDelta && time.Since(lastPass) < discoveryAnalysisPeriod {
+			continue
+		}
+
+		// Check the stop gate again immediately before claiming DB/LLM work. This
+		// lets a just-finished crawl move to its final barrier without admitting
+		// another batch from the same ticker edge.
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		o.db.MarkOutOfScopeFiltered(o.scanID, o.scope)
+		if _, err := filter.NewDeduplicator(o.db, o.logger).Run(o.scanID); err != nil {
+			o.logger.Warn("streaming dedup error", "error", err)
+		}
+		if _, err := filter.NewRelevanceScorer(o.db, o.logger).Run(o.scanID); err != nil {
+			o.logger.Warn("streaming relevance scoring error", "error", err)
+			continue
+		}
+		o.persistEndpoints()
+		counts, err := o.db.GetAnalysisQueueCounts(o.scanID, o.budget.RelevanceThreshold())
+		if err != nil || counts.Ready == 0 {
+			lastPass = time.Now()
+			lastEndpointCount = stats.UniqueEndpoints
+			continue
+		}
+		batchSize := discoveryAnalysisBatchSize
+		if remaining := limit - processed; remaining < batchSize {
+			batchSize = remaining
+		}
+		if counts.Ready < batchSize {
+			batchSize = counts.Ready
+		}
+		if batchSize <= 0 {
+			continue
+		}
+		if !announced {
+			announced = true
+			o.db.InsertNarration(o.scanID, "orchestrator", "streaming_analysis_start",
+				"Discovery warm-up is complete. Endpoint analysis is now running in small prioritized batches while crawling continues.",
+				o.target, map[string]any{"batch_size": discoveryAnalysisBatchSize, "warmup_endpoints": stats.UniqueEndpoints})
+		}
+		analyzer := o.newAnalyzerAgentWithLimit(batchSize)
+		analyzer.SetAppSummaryEnabled(false)
+		if err := analyzer.Start(ctx); err != nil && ctx.Err() == nil {
+			o.logger.Warn("streaming analyzer error", "error", err)
+		}
+		processed += batchSize
+		lastPass = time.Now()
+		lastEndpointCount = stats.UniqueEndpoints
+	}
+}
+
 func (o *Orchestrator) runDiscovery(ctx context.Context) error {
 	crawlerAgent := NewCrawlerAgent(
 		o.browser, o.bus, o.state,
@@ -1466,12 +1589,30 @@ func (o *Orchestrator) runDiscovery(ctx context.Context) error {
 	crawlerAgent.SetAuthConfigured(o.authAlreadyConfigured)
 	crawlerAgent.SetTestingAuthority(o.testingAuthority)
 	crawlerAgent.SetSemanticSaturation(o.semanticSaturation)
+	if o.adaptiveCrawl {
+		crawlerAgent.EnableAdaptiveConvergence(o.crawlTimeout, 20, 12)
+		o.db.InsertNarration(o.scanID, "orchestrator", "adaptive_crawl",
+			"Adaptive discovery is enabled: crawl breadth is uncapped, but discovery will stop after the observed surface converges or its time ceiling is reached.",
+			o.target, map[string]any{"time_limit": o.crawlTimeout.String(), "min_pages": 20, "stagnation_pages": 12})
+		return crawlerAgent.Start(ctx)
+	}
 
-	// Set up a timeout for the crawl phase
-	crawlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// A zero timeout is the explicit CLI escape hatch for a truly unlimited
+	// crawl (normally paired with --max-pages=0). A configured timeout is a
+	// graceful discovery boundary, not a failed scan.
+	if o.crawlTimeout <= 0 {
+		return crawlerAgent.Start(ctx)
+	}
+	crawlCtx, cancel := context.WithTimeout(ctx, o.crawlTimeout)
 	defer cancel()
-
-	return crawlerAgent.Start(crawlCtx)
+	err := crawlerAgent.Start(crawlCtx)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		o.db.InsertNarration(o.scanID, "crawler", "time_limit",
+			fmt.Sprintf("Crawl time limit reached after %s; continuing with the captured surface.", o.crawlTimeout.Round(time.Second)),
+			o.target, nil)
+		return nil
+	}
+	return err
 }
 
 func (o *Orchestrator) persistEndpoints() {

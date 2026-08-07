@@ -434,7 +434,7 @@ Only include API endpoints, WebSocket endpoints, GraphQL endpoints, and real cli
 		SystemPrompt: "You are a JavaScript code analyzer specializing in finding API endpoints and routes. Output only valid JSON.",
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
 		Temperature:  0.1,
-		MaxTokens:    2048,
+		MaxTokens:    llm.StructuredOutputTokenLimit(j.provider, 2048, 10240),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, j.provider, j.budget, req, 0)

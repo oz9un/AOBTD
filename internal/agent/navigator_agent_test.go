@@ -1063,6 +1063,28 @@ func TestNextSafeFormActionFillsThenSubmits(t *testing.T) {
 	}
 }
 
+func TestNextSafeFormActionKeepsMemoryAcrossSPAQueryUpdates(t *testing.T) {
+	memory := make(map[string]*navigatorFormMemory)
+	state := &browser.PageState{
+		URL:    "http://target.test/#/score-board",
+		Inputs: []browser.InputInfo{{Name: "searchQuery", Type: "search", Selector: "#search"}},
+	}
+	first := nextSafeFormAction(state, memory)
+	if first == nil || first.Action != "fill" || first.Selector != "#search" {
+		t.Fatalf("first action = %#v, want search fill", first)
+	}
+
+	// Angular updates the hash query as the field changes. This remains the
+	// same form and must not reset memory or append the safe value forever.
+	state.URL = "http://target.test/#/score-board?searchQuery=aobtd-test"
+	if second := nextSafeFormAction(state, memory); second != nil {
+		t.Fatalf("SPA query update reset form memory: %#v", second)
+	}
+	if len(memory) != 1 {
+		t.Fatalf("form memory has %d page keys, want one stable route key", len(memory))
+	}
+}
+
 func TestNextSafeFormActionAvoidsDestructiveSubmit(t *testing.T) {
 	state := &browser.PageState{
 		URL:    "http://target.test/#/checkout",

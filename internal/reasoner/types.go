@@ -10,6 +10,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ozzyw/aobtd/internal/llm"
 	"github.com/ozzyw/aobtd/internal/store"
 	"github.com/ozzyw/aobtd/pkg/types"
 )
@@ -146,6 +147,21 @@ type ReasonerUsage struct {
 	InputTokens  int
 	OutputTokens int
 	ModelID      string
+}
+
+func reasonerUsageFromError(err error, provider llm.Provider) ReasonerUsage {
+	usage, modelID, billed := llm.UsageFromError(err)
+	if !billed {
+		return ReasonerUsage{}
+	}
+	if modelID == "" && provider != nil {
+		modelID = provider.ModelInfo().Name
+	}
+	return ReasonerUsage{
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
+		ModelID:      modelID,
+	}
 }
 
 // KnownTechniques is the allowlist of technique names a reasoner may

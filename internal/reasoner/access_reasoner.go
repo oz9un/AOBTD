@@ -76,19 +76,20 @@ func (r *AccessReasoner) Apply(ctx context.Context, ev Evidence) ([]ProbePlan, R
 			{Role: "user", Content: userMessage},
 		},
 		Temperature: 0.2,
-		MaxTokens:   3500,
+		MaxTokens:   llm.StructuredOutputTokenLimit(r.llm, 3500, 10240),
 		JSONMode:    true,
 	}
 
 	resp, err := r.llm.Complete(ctx, req)
 	if err != nil {
+		usage := reasonerUsageFromError(err, r.llm)
 		if len(fallbackPlans) > 0 {
 			setPlanSource(fallbackPlans, r.Name())
 			r.logger.Warn("AccessReasoner: model failed; using deterministic fallback",
 				"err", err, "fallback_plans", len(fallbackPlans))
-			return fallbackPlans, ReasonerUsage{}, nil
+			return fallbackPlans, usage, nil
 		}
-		return nil, ReasonerUsage{}, fmt.Errorf("access reasoner LLM: %w", err)
+		return nil, usage, fmt.Errorf("access reasoner LLM: %w", err)
 	}
 	usage := ReasonerUsage{
 		InputTokens:  resp.Usage.InputTokens,

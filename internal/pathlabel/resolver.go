@@ -268,7 +268,7 @@ func (r *resolver) callLLM(
 		SystemPrompt: labelSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: userPrompt}},
 		Temperature:  0.1,
-		MaxTokens:    400,
+		MaxTokens:    llm.StructuredOutputTokenLimit(r.provider, 400, 2048),
 		JSONMode:     true,
 	}, 0)
 	if err != nil {

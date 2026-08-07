@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -181,6 +182,12 @@ func (a *AnalyzerAgent) Start(ctx context.Context) error {
 		if a.budget.Level() == llm.BudgetExhausted {
 			a.logger.Info("budget exhausted, stopping analysis")
 			break
+		}
+
+		if acknowledged, ackErr := a.db.AcknowledgeEquivalentAnalyzedEvidence(a.scanID); ackErr != nil {
+			a.logger.Warn("analysis evidence watermark unavailable", "error", ackErr)
+		} else if acknowledged > 0 {
+			a.logger.Debug("equivalent recaptures acknowledged without reanalysis", "rows", acknowledged)
 		}
 
 		// Get a wider capture-prioritized window, then let the current semantic
@@ -386,7 +393,7 @@ func (a *AnalyzerAgent) reserveAppSummaryOutput() *llm.BudgetReservation {
 }
 
 func appSummaryTokenAllowance(provider llm.Provider) int {
-	limit := appSummaryMaxTokens
+	limit := llm.StructuredOutputTokenLimit(provider, appSummaryMaxTokens, 10240)
 	if provider != nil {
 		if providerLimit := provider.ModelInfo().MaxOutputTokens; providerLimit > 0 && providerLimit < limit {
 			limit = providerLimit
@@ -1307,7 +1314,7 @@ Respond with a single PageProfile JSON object.`,
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0.2,
-		MaxTokens:   2048,
+		MaxTokens:   llm.StructuredOutputTokenLimit(a.provider, 2048, 10240),
 		JSONMode:    true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, a.provider, a.budget, req, estimatedTokens)
@@ -2284,7 +2291,7 @@ Respond with the verification JSON.`,
 			{Role: "user", Content: userPrompt},
 		},
 		Temperature: 0.1,
-		MaxTokens:   1024,
+		MaxTokens:   llm.StructuredOutputTokenLimit(a.provider, 1024, 4096),
 		JSONMode:    true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, a.provider, a.budget, req, estimatedTokens)
@@ -3234,6 +3241,41 @@ func (a *AnalyzerAgent) parseProfile(content string) *types.PageProfile {
 		}
 	}
 
+	// Reasoning models occasionally embed JavaScript-style string helpers in
+	// otherwise valid JSON test values (for example "A".repeat(10000)). Keep
+	// the intent as a short descriptive literal rather than expanding a large
+	// active payload, then retry the complete profile before falling back to a
+	// low-confidence partial salvage.
+	for _, candidate := range []string{
+		repairDroppedProfileIDPrefix(content),
+		repairDroppedProfileIDPrefix(cleaned),
+		repairModelJSONExpressions(content),
+		repairModelJSONExpressions(cleaned),
+	} {
+		if candidate == content || candidate == cleaned {
+			continue
+		}
+		var repairedProfile types.PageProfile
+		if err := json.Unmarshal([]byte(candidate), &repairedProfile); err == nil && repairedProfile.ID != "" {
+			return &repairedProfile
+		}
+		var repairedProfiles []types.PageProfile
+		if err := json.Unmarshal([]byte(candidate), &repairedProfiles); err == nil && len(repairedProfiles) > 0 {
+			return &repairedProfiles[0]
+		}
+		if p := tryUnwrapProfile(candidate); p != nil {
+			return p
+		}
+		if p := salvagePageProfileFromPartial(candidate); p != nil {
+			a.logger.Info("salvaged profile after repairing dropped id prefix",
+				"id", p.ID,
+				"url", p.URL,
+				"confidence", p.Confidence,
+			)
+			return p
+		}
+	}
+
 	// Hosted models can hit an output ceiling after completing the core page
 	// identity but before closing a trailing array (usually follow_ups or
 	// relationships). Preserve only values whose JSON value is demonstrably
@@ -3258,6 +3300,27 @@ func (a *AnalyzerAgent) parseProfile(content string) *types.PageProfile {
 	a.logger.Warn("failed to parse LLM response as profile",
 		"content_length", len(content), "content_preview", preview)
 	return nil
+}
+
+var modelJSONStringRepeatRE = regexp.MustCompile(`"((?:\\.|[^"\\])*)"\.repeat\((\d{1,6})\)`)
+var modelDroppedProfileIDPrefixRE = regexp.MustCompile(`(?is)^\s*\{?\s*"?:\s*"(?:\\.|[^"\\])+"\s*,`)
+
+func repairModelJSONExpressions(content string) string {
+	return modelJSONStringRepeatRE.ReplaceAllString(content, `"$1 (repeat $2 times)"`)
+}
+
+func repairDroppedProfileIDPrefix(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !modelDroppedProfileIDPrefixRE.MatchString(trimmed) ||
+		!strings.Contains(trimmed, `"url"`) ||
+		!strings.Contains(trimmed, `"method"`) ||
+		!strings.Contains(trimmed, `"purpose"`) {
+		return content
+	}
+	if strings.HasPrefix(trimmed, `{`) {
+		return `{"id` + strings.TrimPrefix(trimmed, `{`)
+	}
+	return `{"id` + trimmed
 }
 
 // salvagePageProfileFromPartial recovers the minimum useful PageProfile from

@@ -181,6 +181,11 @@ func canonicalFindingEndpointForKind(kind, endpoint string) string {
 		for strings.HasSuffix(endpoint, "/{id}") {
 			endpoint = strings.TrimSuffix(endpoint, "/{id}")
 		}
+	case "jwt_unsigned":
+		// Signature validation is a token-verifier/root-cause failure, not a
+		// separate vulnerability for every endpoint that accepts the token.
+		// Merge independent acceptance proofs into one richer finding.
+		endpoint = "@jwt-validation"
 	}
 	if endpoint == "" {
 		return "/"
@@ -194,7 +199,7 @@ func canonicalFindingKind(f types.Finding) string {
 	switch vulnType {
 	case "sql_injection":
 		return "sqli"
-	case "broken_object_level_authorization", "bola":
+	case "broken_object_level_authorization", "broken_object_access_recovered_id", "bola":
 		return "idor"
 	case "", "other", "unknown":
 		title := strings.ToLower(f.Title)

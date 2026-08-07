@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,5 +56,31 @@ func TestBudgetReservationIncludesOutputCap(t *testing.T) {
 	budget := NewBudget(0, 100, 0, nil)
 	if _, ok := budget.Reserve("gpt-4.1-mini", 1, 101); ok {
 		t.Fatal("reservation exceeding output cap was accepted")
+	}
+}
+
+func TestCompleteBudgetedCommitsBilledUsageFromError(t *testing.T) {
+	provider := &fallbackTestProvider{
+		model: "MiniMax-M3",
+		err: &CompletionError{
+			Message: "reasoning exhausted completion allowance",
+			Usage:   Usage{InputTokens: 6200, OutputTokens: 2400},
+			Model:   "MiniMax-M3",
+		},
+	}
+	budget := NewBudget(100_000, 100_000, 0, nil)
+	_, err := CompleteBudgeted(context.Background(), provider, budget, &Request{
+		Messages:  []Message{{Role: "user", Content: "return JSON"}},
+		MaxTokens: 8192,
+	}, 6200)
+	if err == nil {
+		t.Fatal("CompleteBudgeted() error = nil")
+	}
+	if budget.UsedInput() != 6200 || budget.UsedOutput() != 2400 {
+		t.Fatalf("billed error usage = %d/%d, want 6200/2400",
+			budget.UsedInput(), budget.UsedOutput())
+	}
+	if _, ok := budget.Reserve("MiniMax-M3", 1, 97_601); ok {
+		t.Fatal("failed-call output usage was incorrectly refunded")
 	}
 }

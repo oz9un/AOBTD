@@ -76,6 +76,10 @@ func (a *CrawlerAgent) SetSemanticSaturation(state *SemanticSaturationState) {
 	a.semanticSaturation = state
 }
 
+func (a *CrawlerAgent) EnableAdaptiveConvergence(maxDuration time.Duration, minPages, stagnationPages int) {
+	a.crawler.EnableAdaptiveConvergence(maxDuration, minPages, stagnationPages)
+}
+
 // NewCrawlerAgent creates a crawler agent.
 func NewCrawlerAgent(
 	ctrl *browser.Controller,
@@ -297,6 +301,10 @@ func (a *CrawlerAgent) Start(ctx context.Context) error {
 		"pages_visited", a.crawler.Visited(),
 		"endpoints", a.state.EndpointCount(),
 	)
+	if reason := a.crawler.AdaptiveStopReason(); reason != "" {
+		a.db.InsertNarration(a.scanID, "crawler", "adaptive_convergence", reason, target,
+			map[string]any{"pages_visited": a.crawler.Visited()})
+	}
 	return nil
 }
 
@@ -491,7 +499,7 @@ func (a *CrawlerAgent) classifyAndNarrateShape(ctx context.Context, ev browser.S
 		SystemPrompt: shapeClassifyPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: userPrompt}},
 		Temperature:  0.1,
-		MaxTokens:    256,
+		MaxTokens:    llm.StructuredOutputTokenLimit(a.provider, 256, 1024),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, a.provider, a.budget, req, estTokens)

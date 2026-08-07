@@ -168,11 +168,11 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 	db.Conn().QueryRow(`SELECT COUNT(*) FROM follow_ups WHERE scan_id=? AND status='done'`, scanID).
 		Scan(&wm.DirectivesCompleted)
 
-	// Hosts by endpoint count (top 10)
+	// Hosts by endpoint count (top 8)
 	rows, err := db.Conn().Query(`
 		SELECT host, COUNT(DISTINCT endpoint_hash) AS n
 		FROM traffic WHERE scan_id=? AND is_filtered=FALSE
-		GROUP BY host ORDER BY n DESC LIMIT 10`, scanID)
+		GROUP BY host ORDER BY n DESC LIMIT 8`, scanID)
 	if err == nil {
 		for rows.Next() {
 			var h string
@@ -189,8 +189,8 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 		return nil, fmt.Errorf("load profiles: %w", err)
 	}
 	wm.TopIssues = clusterProfileIssues(profs)
-	wm.InterestingEndpoints = topInterestingProfiles(profs, 20)
-	wm.OwnershipCandidates = ownershipCandidatesFromProfiles(profs, 8)
+	wm.InterestingEndpoints = topInterestingProfiles(profs, 12)
+	wm.OwnershipCandidates = ownershipCandidatesFromProfiles(profs, 5)
 
 	// Findings (confirmed first)
 	rowsF, err := db.Conn().Query(`
@@ -200,7 +200,7 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 			CASE confidence WHEN 'confirmed' THEN 0 WHEN 'possible' THEN 1 ELSE 2 END,
 			CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3
 			              WHEN 'low' THEN 4 ELSE 5 END
-		LIMIT 20`, scanID)
+		LIMIT 12`, scanID)
 	if err == nil {
 		for rowsF.Next() {
 			var f wmFindingCard
@@ -217,7 +217,7 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 			action IN ('thought','confirmed','dismissed','queued_followups','diff','saturated','auth','phase','complete')
 			OR agent IN ('verifier','change-detector','explorer','auth')
 		)
-		ORDER BY id DESC LIMIT 30`, scanID)
+		ORDER BY id DESC LIMIT 16`, scanID)
 	if err == nil {
 		for rowsN.Next() {
 			var n wmNarrationCard
@@ -239,7 +239,7 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 	rowsR, err := db.Conn().Query(`
 		SELECT message, COALESCE(url, '') FROM narrations
 		WHERE scan_id=? AND agent='strategist' AND action='rejected_directive'
-		ORDER BY id DESC LIMIT 8`, scanID)
+		ORDER BY id DESC LIMIT 6`, scanID)
 	if err == nil {
 		for rowsR.Next() {
 			var r wmRejectedDirectiveCard
@@ -266,7 +266,7 @@ func buildStrategistWorldModel(db *store.DB, scanID int64) (*strategistWorldMode
 		}
 		card := loadHypothesisEvidence(db, scanID, h)
 		wm.ActiveHypotheses = append(wm.ActiveHypotheses, card)
-		if len(wm.ActiveHypotheses) >= 10 {
+		if len(wm.ActiveHypotheses) >= 6 {
 			break
 		}
 	}

@@ -41,6 +41,8 @@ Your output drives real work. Directives you emit execute against a live target.
 	   - A list/filter parameter named ids is not automatically an object-ownership boundary and is never evidence of URL injection. probe_idor requires an observed scalar identifier for a single owned resource plus an ownership-aware comparison plan.
 	   - Never infer an open/unvalidated redirect from a parameter merely accepting strings. Require an observed 3xx Location, client navigation sink, or differential redirect evidence.
 5. Update the EXECUTIVE SUMMARY — 300 chars max — seeding the next cycle.
+6. Think briefly. Do not restate the situation report or explain your analysis;
+   spend the output on the compact JSON decision only.
 
 ## Available directive actions
 
@@ -67,7 +69,7 @@ Only these actions exist. Anything else MUST be dropped — do not invent new on
 - Output ONE JSON object. No markdown. No code fences. No prose before or after.
 - The output schema below is FIXED. Keys that aren't in the schema are ignored.
 - executive_summary appears FIRST in the output so you commit to a view of the target early.
-- Max 8 directives per cycle. Prioritize information-gain per probe.
+- Max 4 directives per cycle. Prioritize information-gain per probe.
 - confidence on hypotheses must be in [0.0, 1.0]. Typical mapping: 0.3 = hunch, 0.5 = seems likely, 0.7 = supported by evidence, 0.9 = directive came back confirmed, 0.95+ = multiple confirming signals. When an Explorer verdict confirms a hypothesis you SHOULD raise the confidence to at least 0.9 on the next cycle.
 - priority on directives must be in [1, 10], 10 = run-first.
 - You are a planner, not a verifier. Never create or imply a confirmed Finding.
@@ -166,7 +168,7 @@ func buildStrategistPrompt(wm *strategistWorldModel) string {
 
 	// Hosts
 	if len(wm.Hosts) > 0 {
-		b.WriteString("## Hosts crawled (top 10 by endpoint count)\n\n")
+		b.WriteString("## Hosts crawled (top 8 by endpoint count)\n\n")
 		for _, h := range wm.Hosts {
 			fmt.Fprintf(&b, "- %s — %d endpoints\n", h.Host, h.Endpoints)
 		}
@@ -266,6 +268,15 @@ func buildStrategistPrompt(wm *strategistWorldModel) string {
 
 	b.WriteString("\n## Now emit the plan\n\nReturn ONE JSON object following the exact schema in the system prompt. No markdown, no code fences, no prose.\n")
 	return b.String()
+}
+
+func buildStrategistCyclePrompt(wm *strategistWorldModel, reason string, planOnly bool) string {
+	prompt := buildStrategistPrompt(wm)
+	if planOnly && reason == "recon_final_model" {
+		prompt += "\n## Final Recon compression rules\n\n" +
+			"This is the last Recon-only planning cycle. Return compact JSON under 900 output tokens: executive_summary <= 240 chars, max 2 hypotheses, max 1 directive, max 2 evidence refs per hypothesis/directive, statement/reason <= 140 chars. Do not restate route lists. If no single next manual test is clearly best, return directives: [].\n"
+	}
+	return prompt
 }
 
 func safeStr(s, fallback string) string {

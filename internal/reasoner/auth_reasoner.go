@@ -70,14 +70,14 @@ func (r *AuthReasoner) Apply(ctx context.Context, ev Evidence) ([]ProbePlan, Rea
 		Messages: []llm.Message{
 			{Role: "user", Content: userMessage},
 		},
-		Temperature: 0.2,  // tight — we want reproducible plans
-		MaxTokens:   3500, // headroom so JSON isn't truncated mid-field
+		Temperature: 0.2,                                                // tight — we want reproducible plans
+		MaxTokens:   llm.StructuredOutputTokenLimit(r.llm, 3500, 10240), // includes reasoning-model headroom
 		JSONMode:    true,
 	}
 
 	resp, err := r.llm.Complete(ctx, req)
 	if err != nil {
-		return nil, ReasonerUsage{}, fmt.Errorf("auth reasoner LLM: %w", err)
+		return nil, reasonerUsageFromError(err, r.llm), fmt.Errorf("auth reasoner LLM: %w", err)
 	}
 	usage := ReasonerUsage{
 		InputTokens:  resp.Usage.InputTokens,
@@ -534,6 +534,18 @@ func parsePlans(content string) ([]ProbePlan, error) {
 			raw = raw[:j]
 		}
 		raw = strings.TrimSpace(raw)
+	}
+
+	// MiniMax occasionally drops only the opening array/object bytes while
+	// leaving a complete first plan beginning with the schema's first key.
+	// Repair only this exact boundary shape; arbitrary prose still goes
+	// through the ordinary balanced-JSON parser and remains rejected.
+	if strings.HasPrefix(raw, `"technique"`) {
+		for _, candidate := range []string{"{" + raw, "[{" + raw} {
+			if plans, err := decodePlanJSON(candidate); err == nil {
+				return plans, nil
+			}
+		}
 	}
 
 	if plans, err := decodePlanJSON(raw); err == nil {

@@ -1,10 +1,16 @@
 <p align="center">
-  <img src="internal/ui/static/aobtd-sticker.png" alt="AOBTD" width="480">
+  <a href="https://aobtd.com">
+    <img src="internal/ui/static/aobtd-sticker.png" alt="AOBTD" width="480">
+  </a>
 </p>
 
 <h3 align="center">AI One Bites The DAST</h3>
 
 <p align="center">An LLM-driven web scanner that tries to understand a target before it attacks it.</p>
+
+<p align="center">
+  <strong><a href="https://aobtd.com">Visit aobtd.com →</a></strong>
+</p>
 
 ---
 
@@ -69,6 +75,39 @@ If you need to widen scope:
 
 CLI and UI share one SQLite store, so a CLI scan opens in the UI, and a UI scan can be re-opened from disk with `./aobtd ui --input ./aobtd-output`.
 
+## External and continuous recon
+
+AOBTD can run Enumeraite before the browser phase and keeps every result with
+its source, evidence state, confidence, and raw provenance. Passive archive and
+Certificate Transparency collection is enabled by default when the Enumeraite
+executable can be found. Missing or partially unavailable sources do not abort
+the browser scan. Local, private-address, and reserved development targets skip
+public passive recon automatically so authorized lab runs start promptly and do
+not import irrelevant Internet-archive noise.
+
+```bash
+export AOBTD_ENUMERAITE_BIN=/path/to/enumeraite
+
+./aobtd scan --target https://example.com \
+  --include-subdomains \
+  --recon-source wayback --recon-source commoncrawl --recon-source crtsh
+
+# Explicit active confirmation. Vhost probing is never enabled implicitly.
+./aobtd scan --target https://example.com \
+  --include-subdomains --recon-dns --recon-http --recon-vhost \
+  --testing-authority recon
+```
+
+The New Scan dialog exposes the same controls. Results appear in **Recon →
+Observed surface & scope → External recon**, including new/promoted/not
+re-observed deltas against the previous recon snapshot. Enabling **Continuous
+recon** creates lightweight recon-only scan records at the selected interval;
+the UI server must remain running to execute the persisted schedule.
+
+Google search uses the official Programmable Search JSON API rather than page
+scraping. Select the Google source after setting `GOOGLE_CSE_API_KEY` and
+`GOOGLE_CSE_ID` in the scanner environment.
+
 ## How it fits together
 
 ```
@@ -102,6 +141,8 @@ Runs are cheap. A scan costs cents in LLM spend with a small model, and a budget
 ## Status
 
 Pre-alpha, built for DEF CON 34 Demo Labs. Expect breakage and API churn.
+
+Project overview and updates: **[aobtd.com](https://aobtd.com)**
 
 ## License
 

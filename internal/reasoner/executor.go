@@ -1547,18 +1547,35 @@ func sqliGenericConfirmationHit(rule ConfirmationRule, resp *http.Response, body
 	if sqliBooleanDifferentialHit(body, baselineBody) {
 		return matchConfirmationWithoutBodyContains(rule, resp, body)
 	}
-	// Body/header confirmation rules are explicit proof signals from the
-	// reasoner (for example a table row or SQL error marker). Status-only
-	// rules are too weak for generic SQLi because login shells and normal pages
-	// often return 200 for every query value.
-	if (len(rule.BodyContains) > 0 && sqliBodyContainsRuleLooksSpecific(rule.BodyContains)) ||
-		len(rule.HeaderPresent) > 0 {
+	// A planner-provided body marker is useful only when the injected response
+	// introduces it. Markers already present in the benign baseline (for
+	// example "data" in {"data":[]}) prove nothing. Header-only rules are also
+	// too weak for SQLi because ordinary JSON/HTML responses share them.
+	if sqliBodyContainsIntroducedSignal(rule.BodyContains, body, baselineBody) {
 		return matchConfirmation(rule, resp, body)
 	}
 	// Baseline-diff fallback: if the response is >3x the baseline, that's a
 	// strong signal of a tautology-accepted SQLi returning substantially more
 	// data than the benign value.
 	return baselineSize > 0 && len(body) > 3*baselineSize && matchConfirmation(rule, resp, body)
+}
+
+func sqliBodyContainsIntroducedSignal(markers []string, body, baselineBody []byte) bool {
+	if len(markers) == 0 || !sqliBodyContainsRuleLooksSpecific(markers) {
+		return false
+	}
+	response := strings.ToLower(string(body))
+	baseline := strings.ToLower(string(baselineBody))
+	for _, marker := range markers {
+		normalized := strings.ToLower(strings.TrimSpace(marker))
+		if normalized == "" || !sqliBodyContainsRuleLooksSpecific([]string{marker}) {
+			continue
+		}
+		if strings.Contains(response, normalized) && !strings.Contains(baseline, normalized) {
+			return true
+		}
+	}
+	return false
 }
 
 func sqliBaselineValue(field string) string {
@@ -1682,14 +1699,16 @@ func (e *Executor) trySQLiUnionExfil(ctx context.Context, plan ProbePlan) {
 		return
 	}
 	if payload, status, body, ok := e.trySQLiSchemaExfil(ctx, plan, prefix, cols); ok {
-		e.emitFinding(plan, payload, status, body,
+		proofURL := rewriteQueryParam(plan.Target.URL, plan.Target.Field, payload)
+		e.emitFindingWithRequestURL(plan, payload, proofURL, http.MethodGet, status, body,
 			types.SeverityHigh, "sqli_schema_exposure",
 			fmt.Sprintf("SQL injection exposes database schema via %s [via %s]",
 				plan.Target.URL, plan.SourceReasoner),
 			fmt.Sprintf("After confirming SQL injection, AOBTD discovered a UNION shape with %d columns and used it to read database schema metadata. This proves the issue can move from boolean/search manipulation into structured data exfiltration.", cols))
 	}
 	if payload, status, body, ok := e.trySQLiCredentialExfil(ctx, plan, prefix, cols); ok {
-		e.emitFinding(plan, payload, status, body,
+		proofURL := rewriteQueryParam(plan.Target.URL, plan.Target.Field, payload)
+		e.emitFindingWithRequestURL(plan, payload, proofURL, http.MethodGet, status, body,
 			types.SeverityCritical, "sqli_credential_exfiltration",
 			fmt.Sprintf("SQL injection exfiltrates credential-like user data via %s [via %s]",
 				plan.Target.URL, plan.SourceReasoner),
@@ -2280,7 +2299,7 @@ func (e *Executor) emitFindingWithRequestURL(plan ProbePlan, payload, requestURL
 		ParamName:   strings.TrimSpace(plan.Target.Field),
 		Payload:     payload,
 		PocRequest:  buildReasonerPocRequestForURL(method, requestURL, payload),
-		PocResponse: fmt.Sprintf("HTTP/1.1 %d\n\n%s", status, truncate(string(body), 400)),
+		PocResponse: fmt.Sprintf("HTTP/1.1 %d\n\n%s", status, proofResponseBody(vulnType, body, 800)),
 		StepsToReproduce: fmt.Sprintf("1. Send the %s request shown in the proof of exploitation.\n"+
 			"2. Confirm the payload `%s` is applied to `%s`.\n"+
 			"3. Compare with a benign baseline request and observe the response evidence described below.",
@@ -2292,4 +2311,58 @@ func (e *Executor) emitFindingWithRequestURL(plan ProbePlan, payload, requestURL
 	e.db.InsertNarration(e.scanID, "reasoner", "confirmed",
 		fmt.Sprintf("%s plan confirmed: %s", plan.SourceReasoner, title),
 		requestURL, nil)
+}
+
+// proofResponseBody keeps a bounded response while preferring the evidence
+// that caused an impact finding to be confirmed. A prefix-only truncation can
+// preserve an HTML header and discard the schema row or credential marker that
+// actually proves exploitation.
+func proofResponseBody(vulnType string, body []byte, limit int) string {
+	text := string(body)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	lower := strings.ToLower(text)
+	index := -1
+	markers := []string{}
+	switch strings.ToLower(strings.TrimSpace(vulnType)) {
+	case "sqli_schema_exposure":
+		markers = []string{"create table", "table_name", "column_name"}
+	case "sqli_credential_exfiltration":
+		if match := sqliExfilEmailRegex.FindStringIndex(text); match != nil {
+			index = match[0]
+		} else if match := sqliExfilHashRegex.FindStringIndex(text); match != nil {
+			index = match[0]
+		}
+	}
+	if index < 0 {
+		for _, marker := range markers {
+			if candidate := strings.Index(lower, marker); candidate >= 0 && (index < 0 || candidate < index) {
+				index = candidate
+			}
+		}
+	}
+	if index < 0 {
+		return truncate(text, limit)
+	}
+	start := index - limit/3
+	if start < 0 {
+		start = 0
+	}
+	end := start + limit
+	if end > len(text) {
+		end = len(text)
+		start = end - limit
+		if start < 0 {
+			start = 0
+		}
+	}
+	preview := text[start:end]
+	if start > 0 {
+		preview = "... [earlier response omitted] ...\n" + preview
+	}
+	if end < len(text) {
+		preview += "\n... [later response omitted] ..."
+	}
+	return preview
 }

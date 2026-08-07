@@ -453,7 +453,7 @@ func (d *ChangeDetector) commentOnDiff(ctx context.Context, diff assetDiff) (*di
 		SystemPrompt: diffCommentaryPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: user}},
 		Temperature:  0.1,
-		MaxTokens:    256,
+		MaxTokens:    llm.StructuredOutputTokenLimit(d.provider, 256, 1024),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, d.provider, d.budget, req, est)

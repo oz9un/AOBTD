@@ -75,6 +75,40 @@ func TestProtectedHTTPClientEnforcesAuthorityBeforeNetwork(t *testing.T) {
 	}
 }
 
+func TestProtectedHTTPClientBlocksCredentialMutationGETBeforeNetwork(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	engine := mustEngine(t, AuthorityActive, server.URL)
+	client := ProtectHTTPClient(nil, engine, HTTPOptions{})
+	req, err := http.NewRequest(
+		http.MethodGet,
+		server.URL+"/rest/user/change-password?current=admin123&new=admin1234&repeat=admin1234",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("credential mutation unexpectedly succeeded under active authority")
+	}
+	decision, ok := DecisionFromError(err)
+	if !ok || decision.Code != CodeAuthorityDenied ||
+		len(decision.Classes) != 1 || decision.Classes[0] != ActionDestructive {
+		t.Fatalf("credential-mutation denial = (%+v, %v), want destructive authority denial", decision, ok)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("credential mutation reached the network (%d hits)", hits.Load())
+	}
+}
+
 func TestProtectedHTTPClientRevalidatesRedirectHops(t *testing.T) {
 	var escaped atomic.Int32
 	offScope := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

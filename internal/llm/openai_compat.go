@@ -58,11 +58,13 @@ func (o *OpenAICompatible) Name() string {
 func (o *OpenAICompatible) ModelInfo() ModelInfo {
 	maxContextTokens := 32768
 	maxOutputTokens := 4096
-	// MiniMax M2 completion usage includes internal reasoning tokens. Its
+	// MiniMax M2/M3 completion usage includes internal reasoning tokens. Its
 	// documented context window is substantially larger than the generic
 	// OpenAI-compatible fallback, and structured answers need enough completion
 	// room for both reasoning and visible JSON.
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(o.config.Model)), "minimax-m2") {
+	normalizedModel := strings.ToLower(strings.TrimSpace(o.config.Model))
+	if strings.HasPrefix(normalizedModel, "minimax-m2") ||
+		strings.HasPrefix(normalizedModel, "minimax-m3") {
 		maxContextTokens = 204800
 		maxOutputTokens = 10240
 	}
@@ -108,15 +110,24 @@ func (o *OpenAICompatible) Complete(ctx context.Context, req *Request) (*Respons
 		body.Thinking = &oaiThinking{Type: "disabled"}
 		body.ReasoningEffort = "none"
 	}
+	if o.isMiniMaxReasoningModel() {
+		// MiniMax otherwise embeds <think> blocks in content. Keeping reasoning
+		// separate gives downstream JSON parsers only the final answer and also
+		// lets a length-exhausted request continue from the reasoning it already
+		// paid for instead of starting the whole analysis over.
+		body.ReasoningSplit = true
+	}
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 4096
 	}
+	continuationTokens := miniMaxContinuationTokenAllowance(o, maxTokens)
+	initialMaxTokens := maxTokens - continuationTokens
 	if o.config.UseMaxCompletionTokens {
-		body.MaxCompletionTokens = maxTokens
+		body.MaxCompletionTokens = initialMaxTokens
 	} else {
-		body.MaxTokens = maxTokens
+		body.MaxTokens = initialMaxTokens
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -146,6 +157,7 @@ func (o *OpenAICompatible) Complete(ctx context.Context, req *Request) (*Respons
 	var respBody []byte
 	var retriedUsage oaiUsage
 	emptyCompletionRetried := false
+	lengthContinuationAttempted := false
 	retryImmediately := false
 	const maxAttempts = 4
 	backoffs := []time.Duration{0, 1 * time.Second, 3 * time.Second, 7 * time.Second}
@@ -195,13 +207,48 @@ func (o *OpenAICompatible) Complete(ctx context.Context, req *Request) (*Respons
 			return nil, fmt.Errorf("read response: %w", readErr)
 		}
 		if resp.StatusCode == 200 {
+			var candidate oaiResponse
+			candidateParsed := json.Unmarshal(respBody, &candidate) == nil
+			if candidateParsed && responseEndedByLength(candidate) &&
+				continuationTokens > 0 && !lengthContinuationAttempted &&
+				len(candidate.Choices) > 0 && attempt < maxAttempts-1 {
+				// Reserve part of the caller's original output allowance for a
+				// cheap final-answer continuation. MiniMax can otherwise spend
+				// the whole allowance in reasoning and return either no content
+				// or a JSON object cut off near its closing fields. Reusing its
+				// assistant reasoning avoids another full world-model pass.
+				retriedUsage.PromptTokens += candidate.Usage.PromptTokens
+				retriedUsage.CompletionTokens += candidate.Usage.CompletionTokens
+				continuationBody := body
+				continuationBody.Messages = append(append([]oaiMessage(nil), body.Messages...),
+					candidate.Choices[0].Message,
+					oaiMessage{
+						Role: "user",
+						Content: "Continue from the analysis above. Return the requested final answer now. " +
+							"Do not repeat the reasoning or add prose. If JSON was requested, output one complete valid JSON object from the beginning.",
+					})
+				if o.config.UseMaxCompletionTokens {
+					continuationBody.MaxCompletionTokens = continuationTokens
+					continuationBody.MaxTokens = 0
+				} else {
+					continuationBody.MaxTokens = continuationTokens
+					continuationBody.MaxCompletionTokens = 0
+				}
+				jsonBody, err = json.Marshal(continuationBody)
+				if err != nil {
+					return nil, fmt.Errorf("marshal continuation request: %w", err)
+				}
+				lengthContinuationAttempted = true
+				retryImmediately = true
+				continue
+			}
 			// Some OpenAI-compatible providers occasionally return a formally
 			// successful completion with no usable assistant content. Treat one
 			// such response as transient and retry immediately. Limiting this to
 			// one retry avoids turning persistent provider bugs into a request
 			// storm while repairing the common MiniMax empty-stop response.
-			var candidate oaiResponse
-			if json.Unmarshal(respBody, &candidate) == nil && responseContentEmpty(candidate) &&
+			if candidateParsed && responseContentEmpty(candidate) &&
+				!responseEndedByLength(candidate) &&
 				!emptyCompletionRetried && attempt < maxAttempts-1 {
 				retriedUsage.PromptTokens += candidate.Usage.PromptTokens
 				retriedUsage.CompletionTokens += candidate.Usage.CompletionTokens
@@ -228,7 +275,15 @@ func (o *OpenAICompatible) Complete(ctx context.Context, req *Request) (*Respons
 	}
 
 	if len(oaiResp.Choices) == 0 {
-		return nil, fmt.Errorf("empty response from model")
+		usage := Usage{
+			InputTokens:  retriedUsage.PromptTokens + oaiResp.Usage.PromptTokens,
+			OutputTokens: retriedUsage.CompletionTokens + oaiResp.Usage.CompletionTokens,
+		}
+		return nil, &CompletionError{
+			Message: fmt.Sprintf("empty response from model %s", o.config.Model),
+			Usage:   usage,
+			Model:   o.config.Model,
+		}
 	}
 
 	choice := oaiResp.Choices[0]
@@ -240,12 +295,24 @@ func (o *OpenAICompatible) Complete(ctx context.Context, req *Request) (*Respons
 	content = reasoningTagRe.ReplaceAllString(content, "")
 	content = strings.TrimSpace(content)
 	if content == "" {
+		usage := Usage{
+			InputTokens:  retriedUsage.PromptTokens + oaiResp.Usage.PromptTokens,
+			OutputTokens: retriedUsage.CompletionTokens + oaiResp.Usage.CompletionTokens,
+		}
+		message := ""
 		if strings.TrimSpace(choice.Message.ReasoningContent) != "" {
-			return nil, fmt.Errorf("model returned reasoning_content but no final content (model=%s, finish_reason=%q, completion_tokens=%d)",
+			message = fmt.Sprintf("model returned reasoning_content but no final content (model=%s, finish_reason=%q, completion_tokens=%d)",
+				o.config.Model, choice.FinishReason, oaiResp.Usage.CompletionTokens)
+		} else {
+			message = fmt.Sprintf("empty response content from model %s (finish_reason=%q, completion_tokens=%d)",
 				o.config.Model, choice.FinishReason, oaiResp.Usage.CompletionTokens)
 		}
-		return nil, fmt.Errorf("empty response content from model %s (finish_reason=%q, completion_tokens=%d)",
-			o.config.Model, choice.FinishReason, oaiResp.Usage.CompletionTokens)
+		return nil, &CompletionError{
+			Message:    message,
+			Usage:      usage,
+			Model:      o.config.Model,
+			StopReason: choice.FinishReason,
+		}
 	}
 
 	return &Response{
@@ -267,6 +334,11 @@ func responseContentEmpty(resp oaiResponse) bool {
 	return strings.TrimSpace(content) == ""
 }
 
+func responseEndedByLength(resp oaiResponse) bool {
+	return len(resp.Choices) > 0 &&
+		strings.EqualFold(strings.TrimSpace(resp.Choices[0].FinishReason), "length")
+}
+
 func (o *OpenAICompatible) disablesReasoningForGLM() bool {
 	model := strings.ToLower(strings.TrimSpace(o.config.Model))
 	if !strings.HasPrefix(model, "glm-") {
@@ -274,6 +346,23 @@ func (o *OpenAICompatible) disablesReasoningForGLM() bool {
 	}
 	base := strings.ToLower(strings.TrimSpace(o.config.BaseURL))
 	return o.config.Name == "openai-compatible" || strings.Contains(base, "z.ai") || strings.Contains(base, "bigmodel")
+}
+
+func (o *OpenAICompatible) isMiniMaxReasoningModel() bool {
+	if o == nil {
+		return false
+	}
+	model := strings.ToLower(strings.TrimSpace(o.config.Model))
+	return strings.HasPrefix(model, "minimax-m2") || strings.HasPrefix(model, "minimax-m3")
+}
+
+func miniMaxContinuationTokenAllowance(provider *OpenAICompatible, maxTokens int) int {
+	if provider == nil || !provider.isMiniMaxReasoningModel() || maxTokens < 2048 {
+		return 0
+	}
+	// Keep the total allowance unchanged: 75% is available to the initial
+	// reasoning pass and 25% is held for the short "emit the answer" turn.
+	return maxTokens / 4
 }
 
 func isTransientTransportError(err error) bool {
@@ -305,6 +394,7 @@ type oaiRequest struct {
 	ResponseFormat      *oaiResponseFormat `json:"response_format,omitempty"`
 	Thinking            *oaiThinking       `json:"thinking,omitempty"`
 	ReasoningEffort     string             `json:"reasoning_effort,omitempty"`
+	ReasoningSplit      bool               `json:"reasoning_split,omitempty"`
 }
 
 type oaiResponseFormat struct {

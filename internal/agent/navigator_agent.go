@@ -1725,10 +1725,11 @@ func nextSafeFormAction(state *browser.PageState, byURL map[string]*navigatorFor
 	if state == nil {
 		return nil
 	}
-	mem := byURL[state.URL]
+	memoryKey := navigatorFormMemoryKey(state.URL)
+	mem := byURL[memoryKey]
 	if mem == nil {
 		mem = &navigatorFormMemory{Filled: make(map[string]struct{})}
-		byURL[state.URL] = mem
+		byURL[memoryKey] = mem
 	}
 
 	inputs := navigatorFillableInputs(state)
@@ -1762,6 +1763,24 @@ func nextSafeFormAction(state *browser.PageState, byURL map[string]*navigatorFor
 		Selector: button.Selector,
 		Reason:   fmt.Sprintf("Inputs on this page were filled; clicking observed %q button to exercise the workflow and capture resulting API traffic.", strings.TrimSpace(button.Text)),
 	}
+}
+
+func navigatorFormMemoryKey(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return rawURL
+	}
+	// Search controls commonly synchronize their value into the URL after
+	// every keystroke. Query values are page state, not a new workflow. Keep
+	// the hash-route path because /#/login and /#/search are distinct forms,
+	// but discard the hash query for the same reason.
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	if fragmentPath, _, found := strings.Cut(parsed.Fragment, "?"); found {
+		parsed.Fragment = fragmentPath
+	}
+	return parsed.String()
 }
 
 func navigatorFillableInputs(state *browser.PageState) []browser.InputInfo {
@@ -1983,7 +2002,7 @@ Respond with a single JSON action object.`,
 		SystemPrompt: navigatorSystemPromptForAuthority(a.authority),
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
 		Temperature:  0.3,
-		MaxTokens:    768,
+		MaxTokens:    llm.StructuredOutputTokenLimit(a.provider, 768, 2048),
 		JSONMode:     true,
 	}
 	resp, err := llm.CompleteBudgeted(ctx, a.provider, a.budget, req, 0)

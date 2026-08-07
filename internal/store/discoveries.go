@@ -4,13 +4,14 @@ import "fmt"
 
 // Discovery kinds — agents use these strings when recording edges.
 const (
-	DiscoverySeed       = "seed"
-	DiscoveryHTMLLink   = "html-link"
-	DiscoveryFormAction = "form-action"
-	DiscoveryJSRoute    = "js-route"
-	DiscoveryExplorer   = "explorer"
-	DiscoveryNavigator  = "navigator"
-	DiscoveryRedirect   = "redirect"
+	DiscoverySeed          = "seed"
+	DiscoveryHTMLLink      = "html-link"
+	DiscoveryFormAction    = "form-action"
+	DiscoveryJSRoute       = "js-route"
+	DiscoveryExplorer      = "explorer"
+	DiscoveryNavigator     = "navigator"
+	DiscoveryRedirect      = "redirect"
+	DiscoveryExternalRecon = "external-recon"
 )
 
 // Discovery is one edge in the URL discovery graph: a source URL (or an

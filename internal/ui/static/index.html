@@ -49,7 +49,7 @@
   /* Layout */
   --sidebar-w: 240px;
   --detail-w: 460px;
-  --copilot-w: 390px;
+  --copilot-w: 460px;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
@@ -292,6 +292,16 @@ body.home-mode .topbar { display: none; }
 .topbar .refresh-btn:hover { color: var(--text); border-color: var(--accent); }
 
 .view-container { flex: 1; overflow-y: auto; padding: 24px; position: relative; }
+/* Same-view refreshes can briefly replace a tall page with a short loading
+   shell while a secondary request is in flight. Keep enough temporary scroll
+   range for the old viewport until the renderer has finished, otherwise the
+   browser clamps scrollTop and visibly throws the operator toward the top. */
+.view-container.refresh-preserve-scroll::after {
+  content: '';
+  display: block;
+  height: var(--refresh-scroll-spacer, 0px);
+  pointer-events: none;
+}
 
 /* ── Target Copilot ──
    The drawer is a real flex sibling on wide screens so Graph keeps a truthful
@@ -306,45 +316,46 @@ body.home-mode .topbar { display: none; }
 body.copilot-open .copilot-drawer { width: var(--copilot-w); border-left-width: 1px; }
 .copilot-inner { width: var(--copilot-w); height: 100%; display: flex; flex-direction: column; }
 .copilot-head {
-  height: 49px; flex: 0 0 49px; display: flex; align-items: center; gap: 9px;
-  padding: 0 13px; border-bottom: 1px solid var(--border); background: var(--bg2);
+  min-height: 60px; flex: 0 0 60px; display: flex; align-items: center; gap: 11px;
+  padding: 0 16px; border-bottom: 1px solid var(--border); background: var(--bg2);
 }
 .copilot-mark {
-  width: 25px; height: 25px; border: 1px solid rgba(88,166,255,.55); border-radius: 7px;
+  width: 32px; height: 32px; border: 1px solid rgba(88,166,255,.55); border-radius: 8px;
   display: grid; place-items: center; color: var(--accent); background: rgba(88,166,255,.08);
-  font: 800 12px var(--font-mono);
+  font: 800 15px var(--font-mono);
 }
 .copilot-title { min-width: 0; flex: 1; }
-.copilot-title strong { display: block; font: 700 11px var(--font-mono); letter-spacing: .8px; }
-.copilot-title span { display: block; color: var(--text2); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.copilot-title strong { display: block; font: 700 13px var(--font-mono); letter-spacing: .8px; }
+.copilot-title span { display: block; color: var(--text2); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .copilot-icon-btn {
   border: 0; background: transparent; color: var(--text2); cursor: pointer;
-  font: 600 15px var(--font-mono); padding: 4px 6px; border-radius: 4px;
+  font: 600 17px var(--font-mono); padding: 6px 8px; border-radius: 6px;
 }
 .copilot-icon-btn:hover { color: var(--text); background: var(--bg3); }
 .copilot-context {
-  flex: 0 0 auto; min-height: 37px; padding: 7px 12px; border-bottom: 1px solid rgba(139,148,158,.14);
+  flex: 0 0 auto; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid rgba(139,148,158,.14);
   display: flex; align-items: center; gap: 6px; overflow: hidden; background: rgba(22,27,34,.55);
 }
-.copilot-context-label { color: var(--text2); font: 700 8px var(--font-mono); letter-spacing: 1px; text-transform: uppercase; }
+.copilot-context-label { color: var(--text2); font: 700 10px var(--font-mono); letter-spacing: 1px; text-transform: uppercase; }
 .copilot-context-chip {
-  min-width: 0; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 2px 7px;
-  font: 9px var(--font-mono); background: var(--bg);
+  min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 3px 8px;
+  font: 10.5px var(--font-mono); background: var(--bg);
 }
-.copilot-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 11px 11px 18px; }
-.copilot-empty { padding: 18px 3px; }
-.copilot-empty h3 { font-size: 14px; margin-bottom: 5px; }
-.copilot-empty p { color: var(--text2); font-size: 11px; line-height: 1.55; }
-.copilot-prompts { display: grid; gap: 6px; margin-top: 14px; }
+.copilot-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 14px 22px; }
+.copilot-empty { padding: 20px 4px; }
+.copilot-empty h3 { font-size: 17px; margin-bottom: 7px; }
+.copilot-empty p { color: var(--text2); font-size: 13px; line-height: 1.6; }
+.copilot-prompts { display: grid; gap: 8px; margin-top: 18px; }
 .copilot-prompt {
   text-align: left; border: 1px solid var(--border); border-radius: 6px; background: var(--bg2);
-  color: var(--text2); padding: 8px 9px; cursor: pointer; font: 10px/1.4 var(--font-body);
+  color: var(--text2); padding: 11px 12px; cursor: pointer; font: 12px/1.45 var(--font-body);
 }
 .copilot-prompt:hover { border-color: var(--accent); color: var(--text); }
+.copilot-prompt-kicker { display: block; margin-bottom: 5px; color: var(--accent); font: 700 9px var(--font-mono); letter-spacing: .8px; text-transform: uppercase; }
 .copilot-msg { display: flex; margin: 8px 0; }
 .copilot-msg.user { justify-content: flex-end; }
-.copilot-bubble { max-width: 94%; padding: 8px 10px; border-radius: 9px; font-size: 11.5px; line-height: 1.5; word-break: break-word; }
+.copilot-bubble { max-width: 94%; padding: 11px 13px; border-radius: 10px; font-size: 13px; line-height: 1.55; word-break: break-word; }
 .copilot-msg.user .copilot-bubble { background: rgba(88,166,255,.92); color: #fff; border-bottom-right-radius: 2px; }
 .copilot-msg.assistant .copilot-bubble { background: var(--bg2); border: 1px solid rgba(139,148,158,.16); border-bottom-left-radius: 2px; }
 .copilot-history-note {
@@ -353,8 +364,8 @@ body.copilot-open .copilot-drawer { width: var(--copilot-w); border-left-width: 
   color: var(--amber); font: 700 8px/1.35 var(--font-mono); letter-spacing: .3px; text-transform: uppercase;
 }
 .copilot-history-note::before { content: '\25C7'; flex: 0 0 auto; }
-.copilot-bubble code { font: 10px var(--font-mono); color: var(--accent); background: var(--bg); padding: 1px 3px; border-radius: 3px; }
-.copilot-answer-heading { margin: 10px 0 5px; color: var(--text); font: 750 10px/1.35 var(--font-mono); letter-spacing: .55px; text-transform: uppercase; }
+.copilot-bubble code { font: 11.5px var(--font-mono); color: var(--accent); background: var(--bg); padding: 1px 3px; border-radius: 3px; }
+.copilot-answer-heading { margin: 12px 0 6px; color: var(--text); font: 750 11px/1.35 var(--font-mono); letter-spacing: .55px; text-transform: uppercase; }
 .copilot-answer-heading:first-child { margin-top: 0; }
 .copilot-answer-heading.major { color: var(--accent); font-size: 11px; letter-spacing: .7px; }
 .copilot-answer-line { margin: 3px 0; }
@@ -375,19 +386,19 @@ body.copilot-open .copilot-drawer { width: var(--copilot-w); border-left-width: 
 .copilot-evidence-label { width: 100%; color: var(--text2); font: 700 8px var(--font-mono); letter-spacing: .7px; text-transform: uppercase; }
 .copilot-evidence-ref { max-width: 100%; color: var(--green); border: 1px solid rgba(63,185,80,.3); background: rgba(63,185,80,.06); border-radius: 10px; padding: 3px 7px; font: 8.5px var(--font-mono); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .copilot-evidence-ref:hover { border-color: var(--green); color: var(--text); }
-.copilot-composer { flex: 0 0 auto; padding: 10px; border-top: 1px solid var(--border); background: var(--bg2); }
-.copilot-compose-row { display: flex; align-items: flex-end; gap: 7px; }
+.copilot-composer { flex: 0 0 auto; padding: 14px; border-top: 1px solid var(--border); background: var(--bg2); }
+.copilot-compose-row { display: flex; align-items: flex-end; gap: 9px; }
 .copilot-compose-row textarea {
   flex: 1; max-height: 120px; resize: none; outline: none; border: 1px solid var(--border); border-radius: 7px;
-  padding: 8px 9px; background: var(--bg); color: var(--text); font: 11px/1.4 var(--font-body);
+  padding: 10px 11px; background: var(--bg); color: var(--text); font: 13px/1.45 var(--font-body);
 }
 .copilot-compose-row textarea:focus { border-color: var(--accent); }
-.copilot-send { width: 34px; height: 34px; border: 1px solid var(--accent); border-radius: 7px; background: rgba(88,166,255,.12); color: var(--accent); cursor: pointer; font-weight: 800; }
+.copilot-send { width: 40px; height: 40px; border: 1px solid var(--accent); border-radius: 7px; background: rgba(88,166,255,.12); color: var(--accent); cursor: pointer; font-weight: 800; }
 .copilot-send:disabled { opacity: .45; cursor: default; }
-.copilot-footnote { color: var(--text2); font: 8px var(--font-mono); margin-top: 6px; }
+.copilot-footnote { color: var(--text2); font: 9px var(--font-mono); margin-top: 8px; }
 #copilotToggle.active { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,.1); }
 body.home-mode .copilot-drawer { display: none; }
-@media (max-width: 1440px) {
+@media (max-width: 1520px) {
   .copilot-drawer { position: fixed; z-index: 180; right: 0; top: 0; bottom: 0; width: var(--copilot-w); transform: translateX(100%); border-left: 1px solid var(--border); transition: transform .18s ease; box-shadow: -18px 0 45px rgba(0,0,0,.42); }
   body.copilot-open .copilot-drawer { width: var(--copilot-w); transform: translateX(0); }
   /* Keep map affordances out from under the overlay. These are the controls
@@ -397,7 +408,92 @@ body.home-mode .copilot-drawer { display: none; }
   body.copilot-open .atlas-detail { right: calc(var(--copilot-w) + 12px); }
 }
 @media (max-width: 520px) {
-  :root { --copilot-w: min(100vw, 390px); }
+  :root { --copilot-w: 100vw; }
+}
+
+/* Full-page Copilot workspace. The dedicated view should feel like a primary
+   operator surface, not the narrow drawer stretched over a large canvas. */
+.ask-page {
+  width: min(1240px, 100%); height: 100%; min-height: 590px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.ask-page-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+  padding: 2px 2px 0;
+}
+.ask-page-heading { min-width: 0; }
+.ask-page-eyebrow { color: var(--accent); font: 700 10px var(--font-mono); letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 4px; }
+.ask-page-title { font: 750 26px/1.25 var(--font-mono); letter-spacing: -.4px; }
+.ask-page-subtitle { max-width: 720px; margin-top: 6px; color: var(--text2); font-size: 14px; line-height: 1.55; }
+.ask-page-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding-top: 7px; }
+.ask-page-clear {
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg2); color: var(--text2);
+  padding: 7px 11px; cursor: pointer; font: 600 11px var(--font-body);
+}
+.ask-page-clear:hover { color: var(--text); border-color: var(--accent); }
+.ask-page-surface {
+  flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(180deg, rgba(88,166,255,.025), transparent 140px), #0a0f15;
+  box-shadow: 0 18px 55px rgba(0,0,0,.2);
+}
+.ask-page-meta {
+  min-height: 48px; padding: 10px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: rgba(22,27,34,.72);
+}
+.ask-page-meta-label { margin-right: 2px; color: var(--text2); font: 700 9px var(--font-mono); letter-spacing: 1px; text-transform: uppercase; }
+.ask-page-chip {
+  display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px;
+  padding: 4px 9px; background: var(--bg); color: var(--text2); font: 10px var(--font-mono);
+}
+.ask-page-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text2); }
+.ask-page-chip.grounded { color: var(--green); border-color: rgba(63,185,80,.3); }
+.ask-page-chip.grounded::before { background: var(--green); box-shadow: 0 0 8px rgba(63,185,80,.55); }
+.ask-page-chip.approval { color: var(--orange); border-color: rgba(210,153,34,.28); }
+.ask-page-chip.approval::before { background: var(--orange); }
+.ask-page-chip.model { color: var(--accent); border-color: rgba(88,166,255,.28); }
+.ask-page-chip.model::before { background: var(--accent); }
+.ask-page-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 28px 30px; scroll-padding-block: 24px; }
+.ask-page .copilot-empty { max-width: 900px; margin: 0 auto; padding: clamp(24px, 5vh, 64px) 0 30px; }
+.ask-page .copilot-empty h3 { font: 700 22px var(--font-mono); margin-bottom: 8px; }
+.ask-page .copilot-empty p { max-width: 690px; font-size: 15px; line-height: 1.6; }
+.ask-page .copilot-prompts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
+.ask-page .copilot-prompt { min-height: 104px; padding: 16px 17px; border-radius: 9px; font-size: 14px; line-height: 1.5; }
+.ask-page .copilot-prompt:hover { background: rgba(88,166,255,.055); transform: translateY(-1px); }
+.ask-page .copilot-prompt-kicker { font-size: 10px; margin-bottom: 8px; }
+.ask-page .copilot-msg { margin: 13px 0; }
+.ask-page .copilot-bubble { max-width: 82%; padding: 14px 16px; border-radius: 12px; font-size: 15px; line-height: 1.65; }
+.ask-page .copilot-msg.user .copilot-bubble { max-width: 68%; }
+.ask-page .copilot-bubble code { font-size: 13px; }
+.ask-page .copilot-answer-heading { font-size: 12px; margin-top: 16px; }
+.ask-page .copilot-answer-heading.major { font-size: 14px; }
+.ask-page-composer { flex: 0 0 auto; padding: 16px 18px 14px; border-top: 1px solid var(--border); background: var(--bg2); }
+.ask-page-compose-row { display: flex; align-items: flex-end; gap: 10px; }
+.ask-page-input {
+  flex: 1; min-height: 52px; max-height: 150px; resize: none; outline: none;
+  padding: 14px 15px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg); color: var(--text); font: 15px/1.5 var(--font-body);
+}
+.ask-page-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.09); }
+.ask-page-send {
+  min-width: 104px; height: 52px; border: 1px solid var(--accent); border-radius: 9px;
+  background: var(--accent); color: #07111d; cursor: pointer; font: 700 13px var(--font-body);
+}
+.ask-page-send:hover:not(:disabled) { filter: brightness(1.08); }
+.ask-page-send:disabled { opacity: .5; cursor: default; }
+.ask-page-composer-note { display: flex; justify-content: space-between; gap: 16px; margin-top: 9px; color: var(--text2); font: 9.5px var(--font-mono); }
+.ask-page-composer-note .safe { color: var(--orange); }
+@media (max-width: 760px) {
+  .ask-page { gap: 12px; min-height: 520px; }
+  .ask-page-head { display: block; }
+  .ask-page-title { font-size: 22px; }
+  .ask-page-actions { padding-top: 12px; }
+  .ask-page-thread { padding: 14px; }
+  .ask-page .copilot-prompts { grid-template-columns: 1fr; }
+  .ask-page .copilot-bubble, .ask-page .copilot-msg.user .copilot-bubble { max-width: 94%; }
+  .ask-page-composer { padding: 12px; }
+  .ask-page-send { min-width: 62px; }
+  .ask-page-composer-note { display: none; }
 }
 
 /* ── Cards grid ── */
@@ -3085,6 +3181,12 @@ button.rc-brain-move:hover { border-color: rgba(70,215,255,.45); background: rgb
 .rc-leads-title { color:var(--text); font:800 13px var(--font-mono); letter-spacing:.4px; text-transform:uppercase; }
 .rc-leads-sub { margin-top:4px; color:var(--text2); font-size:10.5px; line-height:1.45; max-width:640px; }
 .rc-leads-head .rc-panel-link { margin-left:auto; flex:0 0 auto; }
+.rc-leads-actions { display:flex; gap:6px; margin-left:auto; flex:0 0 auto; }
+.rc-leads-actions .rc-panel-link { margin-left:0; }
+.rc-lead-summary { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:-2px 0 11px; }
+.rc-lead-pill { display:inline-flex; align-items:center; gap:5px; padding:4px 7px; border:1px solid rgba(255,202,92,.24); border-radius:999px; color:var(--rc-amber); background:rgba(255,202,92,.045); font:700 8.5px var(--font-mono); text-transform:uppercase; }
+.rc-lead-pill b { color:var(--text); font-size:10px; }
+.rc-lead-note { color:var(--text2); font:9px var(--font-mono); }
 .rc-lead-tiles { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:6px; margin-bottom:13px; }
 .rc-lead-tile { display:grid; gap:2px; padding:10px 8px; border:1px solid var(--border); border-radius:7px; background:var(--bg); cursor:pointer; text-align:left; transition:border-color .14s,transform .14s,background .14s; }
 .rc-lead-tile:hover { transform:translateY(-1px); }
@@ -4067,20 +4169,27 @@ button.rc-learning-memory-row:hover { border-color: rgba(188,140,255,.4); backgr
    operational lives behind Advanced settings below. */
 .nm-scope-choice {
   display: grid;
-  grid-template-columns: 22px 1fr;
-  gap: 2px 10px;
-  padding: 14px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 3px 11px;
+  padding: 14px 15px;
   border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg2);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(88,166,255,.035), var(--bg2) 58%);
   cursor: pointer;
+  transition: border-color .14s, background .14s, box-shadow .14s;
 }
-.nm-scope-choice:hover { border-color: rgba(88,166,255,.55); }
+.nm-scope-choice:hover {
+  border-color: rgba(88,166,255,.55);
+  background: linear-gradient(135deg, rgba(88,166,255,.075), var(--bg2) 58%);
+}
+.nm-scope-choice:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88,166,255,.12);
+}
+.nm-scope-choice:has(input:disabled) { cursor: default; opacity: .58; }
 .nm-scope-choice input {
-  width: 16px;
-  height: 16px;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
+  margin-top: 1px;
 }
 .nm-scope-choice strong {
   color: var(--text);
@@ -4180,7 +4289,7 @@ button.rc-learning-memory-row:hover { border-color: rgba(188,140,255,.4); backgr
 }
 .nm-grid-2 { grid-template-columns: 1fr 1fr; }
 .nm-grid-3 { grid-template-columns: 1.15fr 1.15fr .7fr; }
-@media (max-width: 520px) {
+@media (max-width: 620px) {
   .nm-grid-2, .nm-grid-3 { grid-template-columns: 1fr; }
 }
 
@@ -4272,6 +4381,183 @@ button.rc-learning-memory-row:hover { border-color: rgba(188,140,255,.4); backgr
   margin-top: 2px; cursor: pointer; user-select: none;
 }
 .nm-field-aux input { margin: 0; }
+
+/* Form controls in the scan modal use a single geometry and focus language.
+   Native checkbox rendering varied by platform and made the dense recon rows
+   look accidental, so square choices and feature switches are explicit. */
+.nm input[type="checkbox"]:not(.nm-toggle-input) {
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  place-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border: 1px solid rgba(139,148,158,.58);
+  border-radius: 5px;
+  background: rgba(13,17,23,.92);
+  cursor: pointer;
+  transition: border-color .14s, background .14s, box-shadow .14s;
+}
+.nm input[type="checkbox"]:not(.nm-toggle-input)::before {
+  content: '';
+  width: 4px;
+  height: 8px;
+  margin-top: -2px;
+  border: solid #07111d;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(0);
+  transition: transform .1s ease;
+}
+.nm input[type="checkbox"]:not(.nm-toggle-input):checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(88,166,255,.12), 0 0 14px rgba(88,166,255,.13);
+}
+.nm input[type="checkbox"]:not(.nm-toggle-input):checked::before {
+  transform: rotate(45deg) scale(1);
+}
+.nm input[type="checkbox"]:not(.nm-toggle-input):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(88,166,255,.2);
+}
+.nm input[type="checkbox"]:not(.nm-toggle-input):disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.nm-toggle-card,
+.nm-toggle-compact {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.nm-toggle-card {
+  min-height: 76px;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(88,166,255,.035), var(--bg2) 58%);
+  transition: border-color .14s, background .14s, box-shadow .14s;
+}
+.nm-toggle-card:hover {
+  border-color: rgba(88,166,255,.55);
+  background: linear-gradient(135deg, rgba(88,166,255,.075), var(--bg2) 58%);
+}
+.nm-toggle-card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88,166,255,.12);
+}
+.nm-toggle-compact {
+  margin-top: 2px;
+  padding: 9px 10px;
+  border: 1px solid rgba(139,148,158,.22);
+  border-radius: 7px;
+  background: rgba(139,148,158,.035);
+}
+.nm-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.nm-toggle-track {
+  position: relative;
+  width: 34px;
+  height: 19px;
+  margin-top: 1px;
+  border: 1px solid rgba(139,148,158,.5);
+  border-radius: 999px;
+  background: rgba(13,17,23,.92);
+  transition: border-color .14s, background .14s, box-shadow .14s;
+}
+.nm-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text2);
+  transition: transform .16s ease, background .16s ease;
+}
+.nm-toggle-input:checked + .nm-toggle-track {
+  border-color: var(--accent);
+  background: rgba(88,166,255,.85);
+  box-shadow: 0 0 14px rgba(88,166,255,.16);
+}
+.nm-toggle-input:checked + .nm-toggle-track::after {
+  background: #07111d;
+  transform: translateX(15px);
+}
+.nm-toggle-input:focus-visible + .nm-toggle-track {
+  box-shadow: 0 0 0 3px rgba(88,166,255,.2);
+}
+.nm-toggle-copy { min-width: 0; }
+.nm-toggle-copy strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  line-height: 1.35;
+}
+.nm-toggle-copy small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text2);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.nm-option-group {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 13px 13px;
+  border: 1px solid rgba(139,148,158,.22);
+  border-radius: 8px;
+  background: rgba(139,148,158,.025);
+}
+.nm-option-group legend { padding: 0 5px; }
+.nm-check-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 2px;
+}
+.nm-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  line-height: 1.25;
+  white-space: nowrap;
+  transition: color .14s, border-color .14s, background .14s;
+}
+.nm-check-row:hover {
+  color: var(--text);
+  border-color: rgba(139,148,158,.22);
+  background: rgba(139,148,158,.045);
+}
+.nm-check-row:has(input:checked) { color: var(--text); }
+.nm-paired-control { align-self: stretch; }
+.nm-paired-control .nm-input { min-height: 48px; }
+@media (max-width: 620px) {
+  .nm-check-list { grid-template-columns: 1fr; }
+  .nm-toggle-card { min-height: auto; }
+}
 
 .nm-input {
   width: 100%;
@@ -4534,6 +4820,203 @@ select.nm-input { appearance: none; -webkit-appearance: none; background-image:
    "Walkthrough ▶" in the topbar. Keeps the rich finding layout
    (.bounty-*) intact; just wraps it with a Prev/Next nav bar on top
    and bottom plus a severity-dot progress strip. */
+.walkthrough-launcher {
+  position: relative;
+  display: flex; align-items: center; gap: 18px;
+  margin-bottom: 16px; padding: 15px 16px 15px 18px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--purple) 38%, var(--border));
+  border-radius: 9px;
+  background:
+    linear-gradient(100deg, color-mix(in srgb, var(--purple) 11%, transparent), transparent 58%),
+    var(--bg2);
+}
+.walkthrough-launcher::before {
+  content: '';
+  position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: var(--purple);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--purple) 60%, transparent);
+}
+.walkthrough-launch-copy { flex: 1; min-width: 0; }
+.walkthrough-launch-eyebrow {
+  color: var(--purple);
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.walkthrough-launch-title {
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+.walkthrough-launch-description {
+  margin-top: 3px;
+  color: var(--text2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.walkthrough-launch-btn {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  min-height: 38px; padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--purple) 78%, #fff);
+  border-radius: 6px;
+  background: var(--purple);
+  color: #090b12;
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--purple) 22%, transparent);
+  cursor: pointer;
+  font: 700 11px/1 var(--font-body);
+  letter-spacing: .02em;
+  transition: transform .14s, box-shadow .14s, filter .14s;
+}
+.walkthrough-launch-btn:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--purple) 30%, transparent);
+}
+.walkthrough-launch-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--purple) 55%, #fff);
+  outline-offset: 2px;
+}
+.walkthrough-launch-btn .arrow { font: 800 15px/1 var(--font-mono); }
+
+/* Recon-to-Findings handoff. These rows deliberately do not reuse finding
+   table styles: they are passive classifications awaiting verification, not
+   vulnerabilities, and must never look counted or confirmed. */
+.findings-leads {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--orange) 35%, var(--border));
+  border-radius: 9px;
+  background: var(--bg2);
+}
+.findings-leads-head {
+  display: flex; align-items: center; gap: 16px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(100deg, color-mix(in srgb, var(--orange) 9%, transparent), transparent 56%);
+}
+.findings-leads-copy { flex: 1; min-width: 0; }
+.findings-leads-kicker {
+  color: var(--orange);
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.findings-leads-title {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+.findings-leads-count {
+  min-width: 24px; padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--orange) 45%, var(--border));
+  border-radius: 999px;
+  color: var(--orange);
+  font: 700 9px/1.2 var(--font-mono);
+  text-align: center;
+}
+.findings-leads-sub {
+  max-width: 860px;
+  margin-top: 4px;
+  color: var(--text2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.findings-leads-action {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text2);
+  cursor: pointer;
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  transition: color .14s, border-color .14s, background .14s;
+}
+.findings-leads-action:hover {
+  color: var(--orange);
+  border-color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 6%, var(--bg));
+}
+.findings-leads-list { display: grid; gap: 5px; padding: 10px; }
+.findings-testing-lead {
+  display: grid;
+  grid-template-columns: 58px minmax(230px, .95fr) minmax(0, 1.35fr) auto;
+  align-items: center; gap: 11px;
+  width: 100%; padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .14s, background .14s, transform .14s;
+}
+.findings-testing-lead.sev-crit { border-left-color: var(--red); }
+.findings-testing-lead.sev-high { border-left-color: var(--orange); }
+.findings-testing-lead.sev-med { border-left-color: var(--accent); }
+.findings-testing-lead:hover {
+  border-color: color-mix(in srgb, var(--orange) 45%, var(--border));
+  background: color-mix(in srgb, var(--orange) 4%, var(--bg));
+  transform: translateY(-1px);
+}
+.findings-testing-lead-badge {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--orange);
+  color: #0b0d12;
+  font: 800 9px/1.2 var(--font-mono);
+  letter-spacing: .04em;
+  text-align: center;
+}
+.findings-testing-lead.sev-crit .findings-testing-lead-badge { background: var(--red); }
+.findings-testing-lead.sev-med .findings-testing-lead-badge { background: var(--accent); }
+.findings-testing-lead-target { min-width: 0; overflow: hidden; }
+.findings-testing-lead-endpoint {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font: 700 11px/1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.findings-testing-lead-param {
+  display: block;
+  margin-top: 2px;
+  color: var(--accent);
+  font: 700 9px/1.3 var(--font-mono);
+}
+.findings-testing-lead-risk {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text2);
+  font: 10px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.findings-testing-lead-state {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text2);
+  font: 700 8px/1 var(--font-mono);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+@media (max-width: 900px) {
+  .walkthrough-launcher, .findings-leads-head { align-items: flex-start; flex-direction: column; }
+  .walkthrough-launch-btn, .findings-leads-action { width: 100%; }
+  .findings-testing-lead { grid-template-columns: 52px minmax(0,1fr) auto; }
+  .findings-testing-lead-risk { grid-column: 2 / -1; }
+}
 .walkthrough-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 14px; margin: -16px -16px 12px;
@@ -5603,6 +6086,20 @@ select.nm-input { appearance: none; -webkit-appearance: none; background-image:
   color: #07111f;
   box-shadow: 0 14px 36px rgba(88,166,255,.34);
 }
+.live-terminal-banner {
+  margin-bottom: 12px;
+  padding: 10px 13px;
+  border: 1px solid rgba(227,179,65,.42);
+  border-left: 3px solid var(--yellow);
+  border-radius: 7px;
+  background: rgba(227,179,65,.07);
+  color: var(--text2);
+  font: 600 var(--fs-xs)/1.45 var(--font-mono);
+}
+.live-terminal-banner b {
+  color: var(--yellow);
+  margin-right: 8px;
+}
 .browser-url {
   font-family: var(--font-mono); font-size: 11px; color: var(--accent); padding: 4px 12px;
   background: var(--bg3); border-top: 1px solid var(--border);
@@ -6396,6 +6893,141 @@ tr.selected td { background: rgba(255,79,216,.08); }
   .home-wordmark { font-size: clamp(38px,13vw,58px); }
   .home-tagline { font-size: 16px; }
 }
+
+/* ── Pentester-first clarity pass ──────────────────────────────────────
+   Keep Recon, Strategy, and Copilot honest about the boundary between a
+   discovered signal, a scheduled experiment, and a verified result. */
+.copilot-capability-map {
+  margin-top: 16px; padding: 12px; border: 1px solid rgba(0,229,255,.22);
+  background: rgba(0,229,255,.035);
+}
+.copilot-capability-title {
+  color: var(--accent); font: 700 9px var(--font-mono); letter-spacing: .8px;
+  text-transform: uppercase;
+}
+.copilot-capability-copy { margin-top: 5px; color: var(--text); font-size: 12px; line-height: 1.5; }
+.copilot-capability-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.copilot-capability-chips span {
+  padding: 4px 7px; border: 1px solid var(--border); background: var(--bg);
+  color: var(--text2); font: 9px var(--font-mono);
+}
+.copilot-prompt { position: relative; padding-left: 14px; }
+.copilot-prompt::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--accent); opacity: .55;
+}
+.copilot-footnote { display: grid; gap: 3px; font-size: 9.5px; line-height: 1.4; }
+.copilot-footnote strong { color: var(--green); font-weight: 700; }
+
+.rc-operator-brief {
+  display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px;
+  padding: 16px; border: 1px solid rgba(0,229,255,.22); background: rgba(0,229,255,.025);
+}
+.rc-operator-brief-card {
+  min-width: 0; padding: 14px; border: 1px solid var(--border); background: var(--bg);
+  box-shadow: inset 3px 0 var(--rc-cyan);
+}
+.rc-operator-brief-card.inferred { box-shadow: inset 3px 0 var(--purple); }
+.rc-operator-brief-card.unknown { box-shadow: inset 3px 0 var(--rc-amber); }
+.rc-operator-brief-kicker {
+  color: var(--rc-cyan); font: 800 10px var(--font-mono); letter-spacing: .85px;
+  text-transform: uppercase;
+}
+.rc-operator-brief-card.inferred .rc-operator-brief-kicker { color: var(--purple); }
+.rc-operator-brief-card.unknown .rc-operator-brief-kicker { color: var(--rc-amber); }
+.rc-operator-brief-title { margin-top: 8px; color: var(--text); font-size: 14px; font-weight: 750; line-height: 1.4; }
+.rc-operator-brief-copy { margin-top: 6px; color: var(--text2); font-size: 12px; line-height: 1.55; }
+.rc-operator-brief-meta { margin-top: 10px; color: var(--text2); font: 10px var(--font-mono); }
+
+/* The understanding disclosure is an operator briefing, not telemetry. */
+#rcUnderstandingDisclosure > summary { min-height: 58px; padding-block: 14px; }
+#rcUnderstandingDisclosure .rc-disclosure-title { font-size: 15px; font-weight: 800; }
+#rcUnderstandingDisclosure .rc-disclosure-meta { font-size: 10.5px; }
+#rcUnderstandingDisclosure .rc-disclosure-body { gap: 18px; padding: 0 18px 20px; }
+#rcUnderstandingDisclosure .rc-gates { padding: 14px; }
+#rcUnderstandingDisclosure .rc-gates-head span:first-child,
+#rcUnderstandingDisclosure .rc-gates-count { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-gate { min-height: 54px; padding: 9px; }
+#rcUnderstandingDisclosure .rc-gate-name { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-gate-value { font-size: 9.5px; }
+#rcUnderstandingDisclosure .rc-story { padding: 16px; }
+#rcUnderstandingDisclosure .rc-story-title { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-story-sub { font-size: 9.5px; }
+#rcUnderstandingDisclosure .rc-story-card { padding: 12px; }
+#rcUnderstandingDisclosure .rc-story-card-head { font-size: 9px; }
+#rcUnderstandingDisclosure .rc-story-card-head b { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-story-item,
+#rcUnderstandingDisclosure .rc-story-stack-item { font-size: 9.5px; padding: 5px 7px; }
+#rcUnderstandingDisclosure .rc-panel { padding: 16px; }
+#rcUnderstandingDisclosure .rc-panel-title { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-panel-sub { font-size: 10px; }
+#rcUnderstandingDisclosure .rc-model-card { padding: 11px; }
+#rcUnderstandingDisclosure .rc-model-card-title { font-size: 12px; }
+#rcUnderstandingDisclosure .rc-model-card-meta { font-size: 11px; }
+#rcUnderstandingDisclosure .rc-tag { font-size: 9px; padding: 3px 6px; }
+#rcUnderstandingDisclosure .rc-objective { padding: 12px; }
+#rcUnderstandingDisclosure .rc-objective-question { font-size: 12px; }
+#rcUnderstandingDisclosure .rc-objective-next { font-size: 11px; }
+
+.rc-leads-explainer {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 0 0 13px;
+  padding: 9px 10px; border: 1px solid var(--border); background: var(--bg);
+}
+.rc-leads-explainer strong { color: var(--text); font-size: 10.5px; }
+.rc-leads-explainer span { color: var(--text2); font-size: 10px; }
+.rc-life-arrow { color: var(--border) !important; font-family: var(--font-mono); }
+.rc-lead { grid-template-columns: 52px minmax(180px,1fr) minmax(0,1.15fr) minmax(118px,.55fr); }
+.rc-lead-state {
+  display: grid; gap: 2px; justify-items: start; min-width: 0; padding-left: 9px;
+  border-left: 1px solid var(--border);
+}
+.rc-lead-state strong { color: var(--text2); font: 800 9px var(--font-mono); letter-spacing: .45px; text-transform: uppercase; }
+.rc-lead-state small { max-width: 100%; overflow: hidden; color: var(--text2); font: 8px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.rc-lead-state.queued strong { color: var(--accent); }
+.rc-lead-state.running strong { color: var(--yellow); }
+.rc-lead-state.tested strong { color: var(--green); }
+.rc-lead-state.confirmed strong { color: var(--red); }
+.rc-lead-state.blocked strong { color: var(--orange); }
+.rc-lead-action { color: var(--accent); font: 800 9px var(--font-mono); text-transform: uppercase; }
+
+.strat-shell { display: flex; flex-direction: column; gap: 14px; min-height: calc(100vh - 120px); }
+.strat-overview {
+  display: grid; grid-template-columns: minmax(280px,1.5fr) repeat(4,minmax(105px,.45fr));
+  gap: 8px; padding: 16px; border: 1px solid var(--border); background: var(--bg2);
+}
+.strat-overview-copy { padding: 3px 8px 3px 2px; }
+.strat-overview-eyebrow { color: var(--accent); font: 800 9px var(--font-mono); letter-spacing: 1px; text-transform: uppercase; }
+.strat-overview-copy h2 { margin: 5px 0 0; color: var(--text); font-size: 20px; }
+.strat-overview-copy p { max-width: 700px; margin: 6px 0 0; color: var(--text2); font-size: 12px; line-height: 1.5; }
+.strat-overview-stat { display: grid; align-content: center; padding: 10px; border: 1px solid var(--border); background: var(--bg); }
+.strat-overview-stat b { color: var(--text); font: 800 20px var(--font-mono); }
+.strat-overview-stat span { margin-top: 4px; color: var(--text2); font: 9px var(--font-mono); text-transform: uppercase; }
+.strat-lifecycle {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 9px 12px;
+  border: 1px solid var(--border); background: rgba(13,17,23,.72);
+}
+.strat-lifecycle b { color: var(--text2); font: 800 9px var(--font-mono); letter-spacing: .8px; text-transform: uppercase; }
+.strat-lifecycle span { color: var(--text); font: 10px var(--font-mono); }
+.strat-grid { flex: 1; height: auto; min-height: 560px; grid-template-columns: minmax(0,1.15fr) minmax(0,.85fr); }
+.strat-panel-header strong { color: var(--text); font-size: 11px; }
+.strat-panel-header small { color: var(--text2); font-size: 10px; text-transform: none; letter-spacing: 0; }
+.strat-execution-summary { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-bottom: 10px; }
+.strat-execution-summary div { padding: 8px; border: 1px solid var(--border); background: var(--bg); }
+.strat-execution-summary b { display: block; color: var(--text); font: 800 16px var(--font-mono); }
+.strat-execution-summary span { color: var(--text2); font: 8px var(--font-mono); text-transform: uppercase; }
+.strat-audit-note { margin-bottom: 9px; color: var(--text2); font-size: 10.5px; line-height: 1.5; }
+
+@media (max-width: 1250px) {
+  .rc-operator-brief { grid-template-columns: 1fr; }
+  .rc-lead { grid-template-columns: 52px minmax(0,1fr) minmax(120px,.8fr); }
+  .rc-lead-state { grid-column: 2 / -1; border-left: 0; padding-left: 0; }
+  .strat-overview { grid-template-columns: repeat(4,1fr); }
+  .strat-overview-copy { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) {
+  .strat-grid { grid-template-columns: 1fr; height: auto; }
+  .strat-overview { grid-template-columns: repeat(2,1fr); }
+}
 </style>
 <script>
 // Apply the saved theme before the body paints, avoiding an arcade-to-classic
@@ -6547,10 +7179,10 @@ tr.selected td { background: rgba(255,79,216,.08); }
     <div class="copilot-thread" id="copilotThread"></div>
     <div class="copilot-composer">
       <div class="copilot-compose-row">
-        <textarea id="copilotInput" rows="1" placeholder="Ask about this target…" oninput="autoSizeCopilotInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAsk('drawer');}"></textarea>
+        <textarea id="copilotInput" rows="1" placeholder="Ask for exact inputs, features, evidence, or test status…" oninput="autoSizeCopilotInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAsk('drawer');}"></textarea>
         <button class="copilot-send" id="copilotSend" onclick="sendAsk('drawer')" title="Send">&#8593;</button>
       </div>
-      <div class="copilot-footnote">Navigation is local. Requests and scan steering always require approval.</div>
+      <div class="copilot-footnote"><span><strong>Read questions are evidence-only.</strong> Ask for exact routes, parameters, workflows, and gaps.</span><span>Requests and scan steering always require approval and remain authority-bounded.</span></div>
     </div>
   </div>
 </aside>
@@ -6668,25 +7300,66 @@ tr.selected td { background: rgba(255,79,216,.08); }
         <div class="nm-section">
           <span class="nm-section-label">Scan behavior</span>
           <div class="nm-grid nm-grid-2">
-        <label class="nm-field">
-          <span class="nm-field-label">Testing authority</span>
-          <select class="nm-input" id="scanTestingAuthority" onchange="updateTestingAuthorityHint()">
-            <option value="recon">Recon Only</option>
-            <option value="active" selected>Active Pentest — Recommended</option>
-            <option value="full_control">Full Control / Owned Target</option>
-          </select>
-        </label>
-        <label class="nm-field" id="scanPageBudgetField">
-          <span class="nm-field-label">Page budget</span>
-          <input type="number" class="nm-input" id="scanMaxPages"
-                 value="20" min="0" max="50000"
-                 oninput="updateScanCostEstimate()">
-          <label class="nm-field-aux"><input type="checkbox" id="scanNoLimit" onchange="toggleNoLimit()"> no limit</label>
-        </label>
+            <label class="nm-field">
+              <span class="nm-field-label">Testing authority</span>
+              <select class="nm-input" id="scanTestingAuthority" onchange="updateTestingAuthorityHint()">
+                <option value="recon">Recon Only</option>
+                <option value="active" selected>Active Pentest — Recommended</option>
+                <option value="full_control">Full Control / Owned Target</option>
+              </select>
+              <span class="nm-hint-small" id="scanTestingAuthorityHint">Controlled state changes are allowed; destructive operations remain blocked.</span>
+            </label>
+            <div class="nm-field" id="scanPageBudgetField">
+              <label class="nm-field-label" for="scanMaxPages">Page budget</label>
+              <input type="number" class="nm-input" id="scanMaxPages"
+                     value="20" min="0" max="50000"
+                     oninput="updateScanCostEstimate()">
+              <label class="nm-toggle-compact">
+                <input class="nm-toggle-input" type="checkbox" id="scanNoLimit" onchange="toggleNoLimit()">
+                <span class="nm-toggle-track" aria-hidden="true"></span>
+                <span class="nm-toggle-copy"><strong>Adaptive breadth</strong><small>No page cap; stops after novelty converges or eight minutes.</small></span>
+              </label>
+            </div>
           </div>
-      <div class="nm-hint-small" id="scanTestingAuthorityHint">
-        Controlled state changes are allowed; destructive operations remain blocked.
-      </div>
+          <div class="nm-section" style="margin-top:16px">
+            <span class="nm-section-label">Recon sources</span>
+            <label class="nm-toggle-card">
+              <input class="nm-toggle-input" type="checkbox" id="scanExternalRecon" checked>
+              <span class="nm-toggle-track" aria-hidden="true"></span>
+              <span class="nm-toggle-copy"><strong>Passive external recon</strong><small>Query Wayback, Common Crawl, and Certificate Transparency before the browser starts.</small></span>
+            </label>
+            <div class="nm-grid nm-grid-2" style="margin-top:10px">
+              <fieldset class="nm-option-group">
+                <legend class="nm-field-label">Passive sources</legend>
+                <div class="nm-check-list">
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconWayback" checked><span>Wayback</span></label>
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconCommonCrawl" checked><span>Common Crawl</span></label>
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconCT" checked><span>crt.sh</span></label>
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconGoogle"><span>Google CSE</span></label>
+                </div>
+              </fieldset>
+              <fieldset class="nm-option-group">
+                <legend class="nm-field-label">Active confirmation</legend>
+                <div class="nm-check-list">
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconDNS"><span>DNS enumeration</span></label>
+                  <label class="nm-check-row"><input type="checkbox" id="scanReconHTTP"><span>HTTP validation</span></label>
+                </div>
+              </fieldset>
+            </div>
+            <label class="nm-toggle-card" style="margin-top:10px">
+              <input class="nm-toggle-input" type="checkbox" id="scanReconVHost">
+              <span class="nm-toggle-track" aria-hidden="true"></span>
+              <span class="nm-toggle-copy"><strong>Virtual-host enumeration (explicit opt-in)</strong><small>Send bounded candidate Host headers to the authorized target and compare them with a random-host baseline.</small></span>
+            </label>
+            <div class="nm-grid nm-grid-2" style="margin-top:10px">
+              <label class="nm-toggle-card">
+                <input class="nm-toggle-input" type="checkbox" id="scanContinuousRecon">
+                <span class="nm-toggle-track" aria-hidden="true"></span>
+                <span class="nm-toggle-copy"><strong>Continuous recon</strong><small>Create recon-only snapshots on a persisted schedule.</small></span>
+              </label>
+              <label class="nm-field nm-paired-control"><span class="nm-field-label">Snapshot interval</span><select class="nm-input" id="scanContinuousReconInterval"><option value="60">Hourly</option><option value="360" selected>Every 6 hours</option><option value="1440">Daily</option><option value="10080">Weekly</option></select></label>
+            </div>
+          </div>
           <label class="nm-field" style="margin-top:14px">
             <span class="nm-field-label">Additional authorized origins</span>
             <input type="text" class="nm-input" id="scanAdditionalScope"
@@ -7001,22 +7674,18 @@ function parseHashRoute() {
   return { view: 'home', scanID: null };
 }
 
-// _suppressHashChange prevents the hashchange listener from re-running
-// applyHashRoute when WE wrote the hash ourselves (tab click etc.).
-// Without this flag every programmatic URL update would echo back as a
-// route-apply, doubling work and risking infinite loops.
-let _suppressHashChange = false;
+// Remember the exact fragment written by the app. A timer-based boolean used
+// to clear before hashchange on a busy main thread, turning one tab click into
+// a second route application and a second full repaint.
+let _selfWrittenHash = '';
 function setHashRoute(view, sid) {
   let target;
   if (!view || view === 'home') target = '#/';
   else if (sid) target = `#/scan/${sid}/${view}`;
   else target = `#/${view}`;
   if (location.hash !== target) {
-    _suppressHashChange = true;
+    _selfWrittenHash = target;
     location.hash = target;
-    // hashchange fires async; reset suppression on the next tick so
-    // a real user-driven hashchange (back button) is still honoured.
-    setTimeout(() => { _suppressHashChange = false; }, 0);
   }
 }
 
@@ -7051,14 +7720,19 @@ async function applyHashRoute() {
     await refreshAll({force: true});
     return;
   }
+  if (r.view !== 'home' && scanID) {
+    await refreshAll({runningView:true, freshView:r.view, repaint:true});
+    return;
+  }
   renderView();
 }
 
 window.addEventListener('hashchange', () => {
-  if (_suppressHashChange) {
-    _suppressHashChange = false;
+  if (_selfWrittenHash && location.hash === _selfWrittenHash) {
+    _selfWrittenHash = '';
     return;
   }
+  _selfWrittenHash = '';
   applyHashRoute();
 });
 
@@ -7132,6 +7806,9 @@ async function init() {
   //     repaint on any view at any time — refreshAll() honours
   //     {force:true} below.
   autoRefreshTimer = setInterval(() => {
+    // A hidden tab cannot benefit from DOM repainting. Refresh when it is
+    // visible again instead of doing surprise layout work in the background.
+    if (document.hidden) return;
     if (currentView === 'home') {
       renderView();
       return;
@@ -7719,7 +8396,10 @@ async function navigateToView(nextView) {
   if (!cache || !cache.scan) {
     await refreshAll({force: true});
   } else {
-    await renderView();
+    // A tab entry is an explicit request for current data. Do not render the
+    // bundle left behind by another pane and wait up to eight seconds for its
+    // first view-specific polling tick.
+    await refreshAll({runningView: true, freshView: nextView, repaint: true});
   }
   if (viewContainer) viewContainer.scrollTo({top:0,left:0,behavior:'auto'});
   refreshCopilotContext();
@@ -7750,7 +8430,7 @@ const VIEWS_AUTO_REPAINT = new Set([
 
 // ─── Refresh ───
 async function refreshAll(opts = {}) {
-  if (refreshAllInFlight && !opts.force) return refreshAllInFlight;
+  if (refreshAllInFlight && !opts.force && !opts.freshView) return refreshAllInFlight;
   while (refreshAllInFlight) {
     try { await refreshAllInFlight; } catch (_) { /* the forced retry still runs */ }
   }
@@ -7764,13 +8444,26 @@ async function refreshAll(opts = {}) {
 }
 
 async function refreshAllOnce(opts = {}) {
-  if (opts.force) resetGraphDataCache();
+  const requestedScanID = scanID;
+  const requestedView = opts.freshView || currentView;
+  if (opts.force) {
+    resetGraphDataCache();
+    // These two views own lazy collections outside the common cache. Without
+    // invalidating them, the Refresh button repainted stale rows.
+    trafficRefreshNeeded = true;
+    ailogRefreshNeeded = true;
+  } else if (opts.runningView && requestedView === 'ailog') {
+    // AI Log is in the live repaint set, so its rows must advance with its
+    // navigation count instead of rebuilding the same cached table.
+    ailogRefreshNeeded = true;
+  }
   const allDatasets = {
     scan: '/api/scan',
     stats: '/api/stats',
     endpoints: '/api/endpoints',
     profiles: '/api/profiles',
     findings: '/api/findings',
+    surface: '/api/surface',
     understanding: '/api/understanding',
     aiStats: '/api/ailog/stats',
   };
@@ -7783,17 +8476,26 @@ async function refreshAllOnce(opts = {}) {
     const byView = {
       live: ['scan','stats','endpoints','findings','aiStats'],
       overview: ['scan','stats','endpoints','profiles','findings','understanding','aiStats'],
-      recon: ['scan','stats','endpoints','profiles','understanding','aiStats'],
-      findings: ['scan','stats','findings'],
+      recon: ['scan','stats','endpoints','profiles','surface','understanding','aiStats'],
+      findings: ['scan','stats','endpoints','findings','surface'],
       chains: ['scan','stats','findings'],
       strategy: ['scan','stats'],
       ailog: ['scan','stats','aiStats'],
     };
-    datasetNames = byView[currentView] || ['scan','stats'];
+    datasetNames = byView[opts.freshView || currentView] || ['scan','stats'];
   }
   const datasetValues = await Promise.all(datasetNames.map(name => api(allDatasets[name])));
-  const nextCache = opts.runningView ? {...cache} : {};
-  datasetNames.forEach((name, index) => { nextCache[name] = datasetValues[index]; });
+  // A scan switch may happen while the requests are in flight. Never commit
+  // the previous scan's payload into the new scan's cache or repaint its page.
+  if (scanID !== requestedScanID) return;
+  const nextCache = {...cache};
+  datasetNames.forEach((name, index) => {
+    // Keep the last successful projection through a transient endpoint error.
+    // Empty arrays/objects are valid fresh data; api() uses null for failure.
+    if (datasetValues[index] !== null && datasetValues[index] !== undefined) {
+      nextCache[name] = datasetValues[index];
+    }
+  });
   cache = nextCache;
   const {scan, stats, endpoints, profiles, findings, understanding, aiStats} = cache;
   if (scanID && copilotLoadedScanID !== scanID) await loadCopilotThread(scanID);
@@ -7836,8 +8538,14 @@ async function refreshAllOnce(opts = {}) {
   setText('nav-findings-count', findings?.length || 0);
   setText('nav-chains-count', (findings||[]).filter(f => (f.vuln_type||'') === 'attack_chain').length);
   setText('nav-overview-count', '');
-  const reconScore = Math.round((Number(understanding?.recon?.metrics?.understanding_score)||0)*100);
-  const hasReconTargets = Number(understanding?.recon?.metrics?.targets_total) > 0;
+  const liveReconScore = typeof stats?.recon_understanding_score === 'number'
+    ? stats.recon_understanding_score
+    : Number(understanding?.recon?.metrics?.understanding_score)||0;
+  const liveReconTargets = typeof stats?.recon_targets_total === 'number'
+    ? stats.recon_targets_total
+    : Number(understanding?.recon?.metrics?.targets_total)||0;
+  const reconScore = Math.round(liveReconScore*100);
+  const hasReconTargets = liveReconTargets > 0;
   setText('nav-recon-count', hasReconTargets ? reconScore + '%' : '—');
   const ts = stats?.traffic;
   setText('nav-traffic-count', ts?.total || 0);
@@ -7872,8 +8580,11 @@ async function refreshAllOnce(opts = {}) {
   // are on a view in the auto-repaint allowlist. Without this gate
   // the 8s tick rebuilds Graph/Knowledge/Endpoints from scratch every
   // time, blowing away scroll and expanded state.
-  if (opts.force || VIEWS_AUTO_REPAINT.has(currentView)) {
-    renderView();
+  if (currentView === requestedView && (opts.force || opts.repaint || VIEWS_AUTO_REPAINT.has(currentView))) {
+    // Keep refresh serialization active through async renderers. Previously
+    // refreshAll resolved as soon as it *started* renderView, so another tick
+    // or navigation could overlap it and replace the page twice.
+    await renderView();
   }
 }
 
@@ -7903,19 +8614,29 @@ async function refreshAllOnce(opts = {}) {
 // view container's scrollTop to its maximum on each call so under-shoots
 // are harmless.
 let _lastRenderedView = null;
+let _renderViewEpoch = 0;
 async function renderView() {
   const vc = document.getElementById('viewContainer');
+  const renderedView = currentView;
+  const renderEpoch = ++_renderViewEpoch;
   const isReRender = (_lastRenderedView === currentView);
   // .view-container is the actual scroll owner (the app shell fixes body
   // height and hides document overflow). Reading window.pageYOffset here
   // always returned zero, so every live repaint silently discarded the
   // operator's position.
   const savedScrollTop = isReRender ? vc.scrollTop : 0;
+  const preserveScroll = isReRender && savedScrollTop > 0;
   const restoreScroll = () => {
-    if (isReRender && savedScrollTop > 0) {
+    if (preserveScroll && renderEpoch === _renderViewEpoch && currentView === renderedView) {
       vc.scrollTo({top:savedScrollTop,left:0,behavior:'auto'});
     }
   };
+  if (preserveScroll) {
+    // The spacer only needs to guarantee maxScrollTop >= savedScrollTop. It
+    // remains outside renderer-owned innerHTML because it is a pseudo-element.
+    vc.style.setProperty('--refresh-scroll-spacer', `${savedScrollTop + vc.clientHeight}px`);
+    vc.classList.add('refresh-preserve-scroll');
+  }
 
   // When leaving the Live view, close any open SSE stream.
   if (currentView !== 'live' && liveState.es) {
@@ -7995,7 +8716,7 @@ async function renderView() {
     default: vc.innerHTML = '<div class="loading">Unknown view</div>';
   }
   syncThemeUI();
-  _lastRenderedView = currentView;
+  _lastRenderedView = renderedView;
 
   // Sync restore — covers Knowledge, Overview, Findings, etc. that
   // paint synchronously when the function returns.
@@ -8019,6 +8740,17 @@ async function renderView() {
     }
     restoreScroll();
     requestAnimationFrame(restoreScroll);
+  }
+  // Give late layout/animation work one paint to settle while the temporary
+  // scroll range is still present, then remove it without changing the
+  // viewport. The epoch guard prevents an older async render from cleaning up
+  // a newer render's preservation state.
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  restoreScroll();
+  if (renderEpoch === _renderViewEpoch && currentView === renderedView) {
+    vc.classList.remove('refresh-preserve-scroll');
+    vc.style.removeProperty('--refresh-scroll-spacer');
+    restoreScroll();
   }
   refreshCopilotContext();
 }
@@ -8463,6 +9195,19 @@ function openScanById(id) {
 // ─── RECON COMMAND CENTER ───
 function rcArray(value) { return Array.isArray(value) ? value : []; }
 function rcPercent(value) { return Math.max(0, Math.min(100, Math.round((Number(value) || 0) * 100))); }
+function rcConciseIdentitySummary(value) {
+  const raw = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return 'Application identity is still forming from observed pages, traffic, and behavior.';
+  if (/\bnot backed by (?:a )?verifiable direct (?:page )?response\b/i.test(raw)) {
+    const routeMentions = raw.match(/\/[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]*/g) || [];
+    const routeCount = new Set(routeMentions.map(route => route.replace(/[.,;]+$/,''))).size;
+    return `${routeCount || 'Several'} candidate route${routeCount === 1 ? '' : 's'} still need direct response evidence. Application identity remains provisional.`;
+  }
+  if (raw.length <= 240) return raw;
+  const firstSentence = raw.match(/^.{1,220}?[.!?](?:\s|$)/)?.[0]?.trim();
+  if (firstSentence && firstSentence.length >= 48) return firstSentence;
+  return raw.slice(0, 220).replace(/\s+\S*$/, '') + '…';
+}
 function rcReconciledAppType(rawType, recon, summary) {
   const normalized = String(rawType || '').trim().toLowerCase().replaceAll('_', ' ');
   if (!normalized) return '';
@@ -8743,27 +9488,32 @@ async function rcLoadPriorComparison(current) {
     root.style.display = 'flex';
   } catch {}
 }
-function rcRenderPathTo100(estimate, score, accessState = 'available', scanStatus = '') {
+function rcRenderPathTo100(estimate, score, accessState = 'available', scanStatus = '', pipeline = {}) {
   const done = score >= 100 || !estimate.items.some(item => !item.met);
   const accessConstrained = !!accessState && accessState !== 'available';
   const running = String(scanStatus).toLowerCase() === 'running';
+	const analysisActive = ['active','caught_up'].includes(String(pipeline?.analysis_state || '').toLowerCase());
+	const warmingUp = running && !analysisActive;
   const work = done ? '0 MIN'
     : accessConstrained ? 'TIME UNKNOWN'
-    : running ? 'COLLECTING NOW'
+		: analysisActive ? 'COLLECTING NOW'
+		: warmingUp ? 'DISCOVERY WARM-UP'
     : estimate.needsOperatorPrerequisite ? 'OPERATOR INPUT'
     : `${estimate.min}–${estimate.max} MIN`;
   const note = done
     ? 'All evidence gates are satisfied, including claim confidence. New evidence can still change the model.'
     : accessConstrained
     ? 'Representative target evidence is blocked or incomplete. Time alone cannot close the model; retry from an authorized environment or restore the missing rendering dependency without expanding scope.'
-    : running
+		: analysisActive
     ? 'The bounded Recon run is collecting these evidence gates in parallel. The estimate will tighten when synthesis completes.'
+		: warmingUp
+		? 'Discovery is collecting the initial representative surface. Prioritized endpoint analysis starts automatically after the warm-up threshold.'
     : estimate.needsOperatorPrerequisite
     ? 'Time alone cannot prove the remaining gate. Supply the named authenticated or second-persona evidence, then run one bounded verification pass.'
     : 'Longest remaining evidence pass, not a guarantee. Every point must be backed by observed or analyzed evidence.';
-  return `<div class="rc-path-score"><strong>${work}</strong><span>${done ? '100% evidence target achieved' : running ? 'bounded evidence pass in progress' : estimate.needsOperatorPrerequisite ? 'prerequisite to reach 100' : 'estimated wall time to next complete pass'}</span></div>
+  return `<div class="rc-path-score"><strong>${work}</strong><span>${done ? '100% evidence target achieved' : analysisActive ? 'bounded evidence pass in progress' : warmingUp ? 'collecting representative endpoints' : estimate.needsOperatorPrerequisite ? 'prerequisite to reach 100' : 'estimated wall time to next complete pass'}</span></div>
     <div class="rc-path-note">${esc(note)}</div>
-    <div class="rc-path-list">${estimate.items.map(item => `<div class="rc-path-item ${item.met ? 'met' : ''}" data-recon-id="${esc(item.id)}" title="${esc(item.next)}"><div class="rc-path-item-name">${item.met ? '✓ ' : ''}${esc(item.label)}</div><div class="rc-path-item-work">${item.met ? 'EVIDENCED' : accessConstrained ? 'ACCESS PREREQUISITE' : running ? 'COLLECTING' : `${item.min}–${item.max} min`}</div></div>`).join('')}</div>`;
+    <div class="rc-path-list">${estimate.items.map(item => `<div class="rc-path-item ${item.met ? 'met' : ''}" data-recon-id="${esc(item.id)}" title="${esc(item.next)}"><div class="rc-path-item-name">${item.met ? '✓ ' : ''}${esc(item.label)}</div><div class="rc-path-item-work">${item.met ? 'EVIDENCED' : accessConstrained ? 'ACCESS PREREQUISITE' : analysisActive ? 'COLLECTING' : warmingUp ? 'QUEUED AFTER WARM-UP' : `${item.min}–${item.max} min`}</div></div>`).join('')}</div>`;
 }
 function rcEvidenceRefs(items, max = 3) {
   const refs = [];
@@ -8801,7 +9551,6 @@ async function showReconDiscoveryEvidence(id, fallbackURL = '') {
   const d = await api('/api/discovery/' + id);
   if (!d) { openWideDetail('Navigator evidence', '<div class="rc-empty">This scan-owned discovery record is unavailable.</div>'); return; }
   const url = d.target_url || fallbackURL || '';
-  const encodedURL = encodeURIComponent(url).replace(/'/g,'%27');
   const direct = String(d.kind||'').toLowerCase() === 'navigator';
   const html = `<div class="rc-proof-hero">
     <div class="rc-proof-kicker">${direct?'Direct browser provenance':'Discovery provenance'} · record #${Number(d.id)||id}</div>
@@ -8811,7 +9560,7 @@ async function showReconDiscoveryEvidence(id, fallbackURL = '') {
       <div class="rc-proof-card"><b>Evidence ceiling</b><p>${direct?'It does not by itself prove framework resolution, rendered content, authorization, route-specific API calls, or state changes.':'Discovery alone does not prove that the URL was opened, rendered, or reachable.'}</p></div>
     </div>
     <div class="rc-proof-meta"><span><strong>Source</strong> · ${esc(d.source_url||'scanner')}</span><span><strong>Recorded as</strong> · ${esc(d.kind||'discovery')}</span>${d.detail?`<span><strong>Navigator intent</strong> · ${esc(d.detail)} · planning rationale, not observed page behavior</span>`:''}<span><strong>Captured</strong> · ${esc(d.found_at||'scan time')}</span></div>
-    <div class="rc-action-row"><button class="rc-btn" onclick="closeDetail();openCopilotEvidence('discovery','${Number(d.id)||id}','${encodedURL}')">Locate in target graph</button></div>
+    <div class="rc-action-row"><button class="rc-btn" data-copilot-kind="discovery" data-copilot-id="${Number(d.id)||id}" data-copilot-url="${escAttr(url)}" onclick="closeDetail();openCopilotEvidenceFrom(this)">Locate in target graph</button></div>
   </div>`;
   openWideDetail(`${direct?'Browser-opened route':'Discovered route'} · #${Number(d.id)||id}`, html);
 }
@@ -9209,6 +9958,9 @@ async function renderReconCommandCenter(el) {
   const metrics = recon.metrics || {};
   const targets = rcArray(recon.targets);
   const sc = cache.scan || {};
+	const pipeline = sc.pipeline || {};
+	const analysisActive = ['active','caught_up'].includes(String(pipeline.analysis_state || '').toLowerCase());
+	const liveProgressLabel = analysisActive ? 'COLLECTING NOW' : 'DISCOVERY WARM-UP';
   const ai = cache.aiStats || {};
   const endpoints = cache.endpoints || [];
   const profiles = cache.profiles || [];
@@ -9230,10 +9982,11 @@ async function renderReconCommandCenter(el) {
     : (storedLevel || (score >= 85 ? 'strong' : score >= 60 ? 'developing' : 'initial'));
   const authority = String(sc.testing_authority || 'active').replaceAll('_',' ');
   const missionPolicy = rcAuthorityAwareNext(mission?.next, authority);
-  const identitySummary = recon.identity?.summary || u.summary || 'Application identity is still forming from observed pages, traffic, and behavior.';
-  const summaryHasSecurityHypothesis = /(?:\b(?:idor|sqli|xss|authorization bypass|exploitable|vulnerable(?:\s+to)?)\b|\bsuggests?\b.{0,48}\bvulnerabilit)/i.test(identitySummary);
+  const rawIdentitySummary = recon.identity?.summary || u.summary || 'Application identity is still forming from observed pages, traffic, and behavior.';
+  const identitySummary = rcConciseIdentitySummary(rawIdentitySummary);
+  const summaryHasSecurityHypothesis = /(?:\b(?:idor|sqli|xss|authorization bypass|exploitable|vulnerable(?:\s+to)?)\b|\bsuggests?\b.{0,48}\bvulnerabilit)/i.test(rawIdentitySummary);
 	const appType = recon.identity?.app_type || u.app_type || 'unclassified';
-	const displayedAppType = rcReconciledAppType(appType, recon, identitySummary);
+	const displayedAppType = rcReconciledAppType(appType, recon, rawIdentitySummary);
 	const accessConstrained = !!access.state && access.state !== 'available';
   const modelPhases = rcArray(ai.phase_breakdown).slice(0, 3);
   const totalModelMs = Number(ai.total_duration_ms) || 0;
@@ -9241,11 +9994,11 @@ async function renderReconCommandCenter(el) {
   const reconScanKey = String(sc.scan_id || sc.id || scanID || '');
   const deferredRequestSerial = ++rcDeferredRequestSerial;
   const reconRenderSignature = JSON.stringify([
-    reconScanKey, sc.status, score, targetMet, targetTotal, endpoints.length, profiles.length,
+    reconScanKey, sc.status, pipeline.phase_key, pipeline.analysis_state, pipeline.analysis_ready, pipeline.analysis_completed, score, targetMet, targetTotal, endpoints.length, profiles.length,
     Number(metrics.overall_confidence)||0, Number(ai.llm_calls)||0, totalModelMs,
 		JSON.stringify(discoveryQuality),
 		JSON.stringify([
-			appType, identitySummary, displayedAppType,
+			appType, rawIdentitySummary, identitySummary, displayedAppType,
 			access.state || '', access.label || '', access.detail || '',
 			objectives.map(item => [item.id, item.met, item.priority, item.question, item.next]),
 			areas.map(item => [item.id || item.name, item.priority, rcArray(item.endpoints).length]),
@@ -9254,11 +10007,19 @@ async function renderReconCommandCenter(el) {
     objectives.map(item => `${item.id}:${item.met}:${item.actual}:${item.target}`).join('|')
   ]);
   if (rcCommandRenderScanKey === reconScanKey && rcCommandRenderSignature === reconRenderSignature && el.querySelector('.rc-root')) {
-    const targetBrain = await api('/api/target-brain');
+    const [targetBrain, strategy, surface] = await Promise.all([
+      api('/api/target-brain'),
+      api('/api/strategy'),
+      cache.surface || api('/api/surface')
+    ]);
     const activeScanKey = String(cache.scan?.scan_id || cache.scan?.id || scanID || '');
     if (currentView !== 'recon' || activeScanKey !== reconScanKey || deferredRequestSerial !== rcDeferredRequestSerial) return;
     const brainRoot = document.getElementById('rcTargetBrain');
     if (brainRoot) brainRoot.innerHTML = rcRenderTargetBrain(targetBrain);
+    const leadsRoot = document.getElementById('rcLeads');
+    if (leadsRoot) leadsRoot.innerHTML = rcRenderLeads(surface, endpoints, profiles, strategy, authority, sc.status);
+    const pentesterBriefRoot = document.getElementById('rcPentesterBrief');
+    if (pentesterBriefRoot) pentesterBriefRoot.innerHTML = rcRenderPentesterBrief(recon, targets, objectives, profiles, surface);
     if (document.getElementById('rcAgentThinkingDisclosure')?.open) {
       await rcLoadAgentInternals(sc.status);
     }
@@ -9277,7 +10038,9 @@ async function renderReconCommandCenter(el) {
         <span class="rc-chip ${sc.status === 'completed' ? 'good' : 'warn'}">${esc(sc.status || 'unknown state')}</span>
         ${access.state && access.state !== 'available' ? `<span class="rc-chip warn">${esc(access.label || access.state)}</span>` : ''}
         <span class="rc-chip">${esc(authority)} authority</span>
+		<span class="rc-chip">${esc(pipeline.phase || 'Pipeline state unavailable')}</span>
         <span class="rc-chip">${endpoints.length} observed endpoints</span>
+		<span class="rc-chip">${Number(pipeline.analysis_ready)||0} queued · ${Number(pipeline.analysis_completed)||profiles.length} analyzed</span>
         ${scanRuntimeMs !== null ? `<span class="rc-chip" title="Observed wall-clock time from scan start to completion">scan time · ${fmtDuration(scanRuntimeMs)}</span>` : ''}
       </div>
     </div>
@@ -9285,14 +10048,14 @@ async function renderReconCommandCenter(el) {
     <div class="rc-mission">
       <div class="rc-mission-head"><span>${mission ? (evidenceTargetMet ? 'Next optional unknown' : 'Current recon objective') : 'Model status'}</span><span class="rc-priority">${mission ? 'P' + mission.priority : 'targets clear'}</span></div>
       <div class="rc-mission-title">${esc(mission?.question || 'Measured understanding targets are satisfied')}</div>
-      <div class="rc-chip-row"><span class="rc-chip ${evidenceTargetMet ? 'good' : 'warn'}">${evidenceTargetMet ? 'EVIDENCE TARGET ACHIEVED' : `PATH TO 100 · ${accessConstrained ? 'ACCESS PREREQUISITE' : sc.status === 'running' ? 'COLLECTING NOW' : pathEstimate.needsOperatorPrerequisite ? 'OPERATOR PREREQUISITE' : `${pathEstimate.min}–${pathEstimate.max} MIN EST.`}`}</span>${missionPolicy.needsActive ? '<span class="rc-chip warn">SEPARATE ACTIVE RUN REQUIRED</span>' : ''}</div>
+      <div class="rc-chip-row"><span class="rc-chip ${evidenceTargetMet ? 'good' : 'warn'}">${evidenceTargetMet ? 'EVIDENCE TARGET ACHIEVED' : `PATH TO 100 · ${accessConstrained ? 'ACCESS PREREQUISITE' : sc.status === 'running' ? liveProgressLabel : pathEstimate.needsOperatorPrerequisite ? 'OPERATOR PREREQUISITE' : `${pathEstimate.min}–${pathEstimate.max} MIN EST.`}`}</span>${missionPolicy.needsActive ? '<span class="rc-chip warn">SEPARATE ACTIVE RUN REQUIRED</span>' : ''}</div>
       <div class="rc-action-row">${mission ? `<button class="rc-btn primary" onclick="askReconObjective('${encodeURIComponent(mission.id).replace(/'/g,'%27')}')">Plan with Copilot</button>` : ''}${missionEvidenceRef ? `<button class="rc-btn" onclick="openReconEvidence('${encodeURIComponent(missionEvidenceRef).replace(/'/g,'%27')}')">Open evidence</button>` : ''}</div>
     </div>
   </div>
-  <div id="rcLeads">${rcRenderLeads(null, endpoints)}</div>
-  <div id="rcSurfaceSummary">${rcRenderSurfaceBrief(null, endpoints, profiles, null)}</div>
+  <div id="rcLeads">${rcRenderLeads(null, endpoints, profiles, null, authority, sc.status)}</div>
   <div class="rc-disclosure-stack">
     <details class="rc-disclosure" id="rcUnderstandingDisclosure"><summary><span class="rc-disclosure-title">What AOBTD understands</span><span class="rc-disclosure-meta">${targetMet}/${targetTotal} evidence gates · ${objectives.length} open objectives</span></summary><div class="rc-disclosure-body">
+      <div id="rcPentesterBrief">${rcRenderPentesterBrief(recon, targets, objectives, profiles, null)}</div>
       <div class="rc-gates"><div class="rc-gates-head"><span>Evidence gates</span><span class="rc-gates-count">${targetMet}/${targetTotal} grounded</span></div>${targets.length ? `<div class="rc-gate-grid">${targets.map(t => { const inner=`<span class="rc-gate-dot"></span><div class="rc-gate-copy"><div class="rc-gate-name">${esc(rcTargetShortLabel(t))}</div><div class="rc-gate-value">${esc(rcTargetValue(t))}</div></div>`; const title=esc([t.label || t.id,t.why_it_matters,!t.met && t.suggested_action ? 'Next: '+t.suggested_action : '',!t.met?'Click to ask Copilot for one grounded next action':''].filter(Boolean).join(' — ')); return t.met ? `<div class="rc-gate met" data-recon-id="${esc(t.id || '')}" title="${title}">${inner}</div>` : `<button type="button" class="rc-gate" data-recon-id="${esc(t.id || '')}" title="${title}" onclick="askReconGap('target','${encodeURIComponent(t.id || '').replace(/'/g,'%27')}')">${inner}</button>`; }).join('')}</div>` : `<div class="rc-empty">Evidence gates appear after the first grounded understanding pass.</div>`}</div>
       <div class="rc-delta" id="rcPriorDelta" style="display:none"></div>
       ${rcRenderTargetStory(recon, evidenceCeiling, profiles)}
@@ -9300,11 +10063,11 @@ async function renderReconCommandCenter(el) {
         <div class="rc-panel"><div class="rc-panel-head"><div class="rc-panel-title">Application model</div><div class="rc-panel-sub">Actors // objects // workflows // boundaries</div><button class="rc-panel-link" onclick="navigateToView('graph')">Explore model</button></div>${rcRenderApplicationModel(recon, evidenceCeiling)}</div>
       </div><div class="rc-column">
         <div class="rc-panel"><div class="rc-panel-head"><div class="rc-panel-title">Functional coverage</div><div class="rc-panel-sub">Priority-weighted areas</div></div>${rcRenderAreas(areas)}</div>
-        <div class="rc-panel"><div class="rc-panel-head"><div class="rc-panel-title">Path to 100</div><div class="rc-panel-sub">Evidence gates // honest estimate</div></div>${rcRenderPathTo100(pathEstimate, score, access.state, sc.status)}</div>
+        <div class="rc-panel"><div class="rc-panel-head"><div class="rc-panel-title">Path to 100</div><div class="rc-panel-sub">Evidence gates // honest estimate</div></div>${rcRenderPathTo100(pathEstimate, score, access.state, sc.status, pipeline)}</div>
         <div class="rc-panel"><div class="rc-panel-head"><div class="rc-panel-title">Objective queue</div><div class="rc-panel-sub">Highest impact first</div></div>${rcRenderObjectiveQueue(objectives, authority)}</div>
       </div></div>
     </div></details>
-    <details class="rc-disclosure" id="rcSurfaceDisclosure"><summary><span class="rc-disclosure-title">Observed surface &amp; scope</span><span class="rc-disclosure-meta">${endpoints.length} endpoints · ${profiles.length} analyzed profiles</span></summary><div class="rc-disclosure-body"><div class="rc-grid"><div class="rc-column">
+    <details class="rc-disclosure" id="rcSurfaceDisclosure"><summary><span class="rc-disclosure-title">Observed surface &amp; scope</span><span class="rc-disclosure-meta">${endpoints.length} endpoints · ${profiles.length} analyzed profiles</span></summary><div class="rc-disclosure-body"><div id="rcSurfaceSummary">${rcRenderSurfaceBrief(null, endpoints, profiles, null)}</div><div class="rc-panel" id="rcExternalRecon"><div class="rc-panel-head"><div class="rc-panel-title">External recon</div><div class="rc-panel-sub">Source provenance // candidates // confirmed assets</div></div><div class="rc-empty">Loading external recon evidence…</div></div><div class="rc-grid"><div class="rc-column">
       <div class="rc-panel" id="rcSurface"><div class="rc-panel-head"><div class="rc-panel-title">Observed surface</div><div class="rc-panel-sub">Evidence, not guesses</div><button class="rc-panel-link" onclick="navigateToView('endpoints')">View all</button></div><div class="rc-empty">Loading attack-surface evidence…</div></div>
     </div><div class="rc-column">
       <div class="rc-panel" id="rcOrigins"><div class="rc-panel-head"><div class="rc-panel-title">Origin &amp; subdomain map</div><div class="rc-panel-sub">Authorized // linked-only // external</div></div><div class="rc-empty">Loading bounded origin evidence…</div></div>
@@ -9325,10 +10088,13 @@ async function renderReconCommandCenter(el) {
 
   rcLoadPriorComparison({score, confidence:rcPercent(metrics.overall_confidence), gates:targetMet, endpoints:endpoints.length, profiles:profiles.length, prerequisites:targets.filter(target => !target.met).length});
 
-  const [surface, originData, targetBrain] = await Promise.all([
-    api('/api/surface'),
+  const [surface, originData, targetBrain, externalRecon, reconMonitor, strategy] = await Promise.all([
+    cache.surface || api('/api/surface'),
     api('/api/discovery-graph?origins_only=1'),
-    api('/api/target-brain')
+    api('/api/target-brain'),
+    api('/api/recon-assets'),
+    api('/api/recon-monitor'),
+    api('/api/strategy')
   ]);
   const activeScanKey = String(cache.scan?.scan_id || cache.scan?.id || scanID || '');
   if (currentView !== 'recon' || activeScanKey !== reconScanKey || deferredRequestSerial !== rcDeferredRequestSerial) return;
@@ -9336,12 +10102,16 @@ async function renderReconCommandCenter(el) {
   const surfaceSummaryRoot = document.getElementById('rcSurfaceSummary');
   const originsRoot = document.getElementById('rcOrigins');
   const brainRoot = document.getElementById('rcTargetBrain');
+  const externalReconRoot = document.getElementById('rcExternalRecon');
   const leadsRoot = document.getElementById('rcLeads');
-  if (leadsRoot) leadsRoot.innerHTML = rcRenderLeads(surface, endpoints);
+  const pentesterBriefRoot = document.getElementById('rcPentesterBrief');
+  if (leadsRoot) leadsRoot.innerHTML = rcRenderLeads(surface, endpoints, profiles, strategy, authority, sc.status);
+  if (pentesterBriefRoot) pentesterBriefRoot.innerHTML = rcRenderPentesterBrief(recon, targets, objectives, profiles, surface);
   if (surfaceSummaryRoot) surfaceSummaryRoot.innerHTML = rcRenderSurfaceBrief(surface, endpoints, profiles, originData);
   if (surfaceRoot) surfaceRoot.innerHTML = `<div class="rc-panel-head"><div class="rc-panel-title">Observed surface</div><div class="rc-panel-sub">Evidence, not guesses</div><button class="rc-panel-link" onclick="navigateToView('endpoints')">View all</button></div>${rcRenderSurface(surface, endpoints, profiles, originData)}`;
   if (originsRoot) originsRoot.innerHTML = `<div class="rc-panel-head"><div class="rc-panel-title">Origin &amp; subdomain map</div><div class="rc-panel-sub">Authorized // linked-only // external</div></div>${rcRenderOrigins(originData)}`;
   if (brainRoot) brainRoot.innerHTML = rcRenderTargetBrain(targetBrain);
+  if (externalReconRoot) externalReconRoot.innerHTML = `<div class="rc-panel-head"><div class="rc-panel-title">External recon</div><div class="rc-panel-sub">Source provenance // candidates // confirmed assets</div></div>${rcRenderExternalRecon(externalRecon, reconMonitor?.monitor)}`;
   const agentDisclosure = document.getElementById('rcAgentThinkingDisclosure');
   if (agentDisclosure) agentDisclosure.addEventListener('toggle', () => {
     if (agentDisclosure.open) rcLoadAgentInternals(sc.status, rcAgentInternalsRunning(sc.status));
@@ -9349,6 +10119,37 @@ async function renderReconCommandCenter(el) {
   if (agentDisclosure?.open) {
     await rcLoadAgentInternals(sc.status, rcAgentInternalsRunning(sc.status));
   }
+}
+
+function rcRenderExternalRecon(payload, monitor) {
+  const rows = rcArray(payload?.observations);
+  const run = payload?.run || null;
+  if (!run && !rows.length) return '<div class="rc-empty">External recon was not enabled for this scan.</div>';
+  const stats = payload?.stats || {};
+  const comparison = payload?.comparison || {};
+  const sourceCounts = Object.entries(stats).filter(([key]) => key.startsWith('source:')).map(([key,value]) => `<span class="rc-chip">${esc(key.slice(7))} · ${Number(value)||0}</span>`).join('');
+  const status = run?.status || 'unknown';
+  const errors = rcArray(run?.errors);
+  const newAssets = new Set(rcArray(comparison.new));
+  const promotedAssets = new Set(rcArray(comparison.promoted));
+  const cards = rows.slice(0,80).map(item => {
+    const evidence = item.evidence || {};
+    const detail = evidence.status_code ? `HTTP ${esc(evidence.status_code)}` : evidence.addresses ? esc(rcArray(evidence.addresses).join(', ')) : evidence.certificate_id ? `certificate ${esc(evidence.certificate_id)}` : '';
+    const delta = newAssets.has(item.value) ? '<span class="rc-chip warn">new</span>' : promotedAssets.has(item.value) ? '<span class="rc-chip good">promoted</span>' : '';
+    return `<div class="rc-origin-row"><div class="rc-origin-main"><b>${esc(item.value)}</b><span>${esc(item.asset_type)} · ${esc(item.source)}${detail ? ` · ${detail}` : ''}</span></div><div class="rc-origin-action">${delta}<span class="rc-chip ${item.state==='confirmed'?'good':item.state==='candidate'?'warn':''}">${esc(item.state)}</span></div></div>`;
+  }).join('');
+  const nextRun = monitor?.next_run_at ? new Date(monitor.next_run_at).toLocaleString() : 'not scheduled';
+  const monitorHTML = monitor?.enabled ? `<div class="rc-chip-row"><span class="rc-chip good">continuous · every ${Number(monitor.interval_minutes)||0} min</span><span class="rc-chip">next · ${esc(nextRun)}</span>${monitor.last_scan_id?`<span class="rc-chip">last snapshot · #${Number(monitor.last_scan_id)}</span>`:''}<button class="rc-btn" onclick="disableReconMonitor()">Stop monitoring</button></div>` : '<div class="rc-summary-note">Continuous recon is off. Enable it when starting a scan to create scheduled recon-only snapshots.</div>';
+  const deltaHTML = Number(comparison.prior_scan_id) ? `<div class="rc-chip-row"><span class="rc-chip">since #${Number(comparison.prior_scan_id)}</span><span class="rc-chip warn">${newAssets.size} new</span><span class="rc-chip good">${promotedAssets.size} promoted</span><span class="rc-chip">${rcArray(comparison.missing).length} not re-observed</span></div>` : '';
+  return `${monitorHTML}${deltaHTML}<div class="rc-chip-row"><span class="rc-chip ${status==='complete'?'good':'warn'}">${esc(status)}</span><span class="rc-chip">${rows.length} observations</span><span class="rc-chip good">${Number(stats.confirmed)||0} confirmed</span><span class="rc-chip">${Number(stats.historical)||0} historical</span>${sourceCounts}</div>${errors.length ? `<div class="rc-summary-note">${errors.map(error=>`${esc(error.source)}: ${esc(error.message)}`).join(' · ')}</div>` : ''}<div class="rc-origin-list">${cards || '<div class="rc-empty">No observations returned.</div>'}</div>${rows.length>80?`<div class="rc-empty">Showing 80 of ${rows.length} observations.</div>`:''}`;
+}
+
+async function disableReconMonitor() {
+  if (!scanID) return;
+  const res = await fetch(`/api/recon-monitor?scan_id=${encodeURIComponent(scanID)}`, {method:'DELETE'});
+  if (!res.ok) return;
+  rcCommandRenderScanKey = '';
+  await renderRecon();
 }
 
 function rcRenderSurfaceBrief(surface, endpoints, profiles, originData) {
@@ -9380,33 +10181,180 @@ const RC_ATTACK = {
   idor:{label:'IDOR',sev:'high',note:'Object reference candidate'},
   open_redirect:{label:'REDIR',sev:'med',note:'Open redirect candidate'}
 };
-function rcRenderLeads(surface, endpoints) {
-  const head = `<div class="rc-leads-head"><div><div class="rc-leads-title">Testing leads</div><div class="rc-leads-sub">Evidence-backed observations to test in a separate authorized active run — analysis, not exploitation.</div></div><button class="rc-panel-link" onclick="navigateToView('endpoints')">View all endpoints</button></div>`;
-  if (!surface) return `<section class="rc-leads">${head}<div class="rc-empty">Correlating observed inputs, auth boundaries, and reflections…</div></section>`;
-  const s = surface || {}, sum = s.summary || {};
-  const inputs = rcArray(s.inputs), reflected = rcArray(s.reflected_params), ab = rcArray(s.auth_boundaries);
-  const eps = rcArray(endpoints);
-  const unauth = ab.filter(a => !a.has_auth && a.returns_data);
-  const mutations = eps.filter(e => ['POST','PUT','PATCH','DELETE'].includes(String(e.method||'').toUpperCase()));
-  const injCount = inputs.filter(i => ['ssrf','sqli','rce','xxe','ssti'].includes(i.attack_type)).length;
-  const tiles = [
-    ['Unauth data', Number(sum.unauth_with_data)||unauth.length, 'high'],
-    ['Injection', injCount, 'crit'],
-    ['XSS', Number(sum.xss_candidates)||0, 'high'],
-    ['Mutations', mutations.length, 'med'],
-    ['Uploads', Number(sum.upload_endpoints)||eps.filter(e=>e.has_file_upload).length, 'med'],
-    ['IDOR', Number(sum.idor_candidates)||rcArray(s.idor_candidates).length, 'high']
-  ];
-  const tileHTML = tiles.map(([k,v,sev]) => `<button class="rc-lead-tile ${v?('sev-'+sev):'zero'}" onclick="navigateToView('endpoints')"><span class="rc-lead-tile-n">${Number(v)||0}</span><span class="rc-lead-tile-k">${esc(k)}</span></button>`).join('');
+function rcLeadTelemetryNoise(endpoint, param) {
+  const ep = String(endpoint||'').toLowerCase();
+  const name = String(param||'').toLowerCase();
+  const telemetryPath = /\s\/(?:awe\/api\/v2\/rum|ces\/(?:v1|statsc)\/|cdn-cgi\/challenge-platform\/)|\/telemetry\//.test(ep);
+  if (!telemetryPath) return false;
+  return true;
+}
+function rcProfileInputLeadRows(profiles) {
   const rows = [];
-  inputs.forEach(i => { const m = RC_ATTACK[i.attack_type] || {label:String(i.attack_type||'input').toUpperCase(),sev:'med',note:'Input worth testing'};
-    rows.push({sev:m.sev,badge:m.label,ep:i.endpoint,param:i.param_name,conf:i.confidence,risk:`${i.input_type||'input'} in ${i.location||'query'} — ${m.note}`}); });
-  reflected.forEach(r => rows.push({sev:'high',badge:'XSS',ep:r.endpoint,param:r.param_name,conf:'reflected',risk:r.risk||'Value reflected in response'}));
+  rcArray(profiles).forEach(profile => {
+    const endpoint = profile?.id || [profile?.method, profile?.url].filter(Boolean).join(' ');
+    const inputs = rcArray(profile?.inputs).length ? rcArray(profile.inputs) : rcArray(profile?.extracted_inputs);
+    inputs.forEach(input => {
+      const type = String(input?.type||'text').toLowerCase();
+      const name = String(input?.name||'').trim() || (type === 'file' ? '(unnamed file)' : '(unnamed input)');
+      const upload = type === 'file';
+      const auth = ['email','password','tel'].includes(type) || /(?:email|password|login|username)/i.test(name);
+      const visibleControl = !['hidden','token'].includes(type);
+      const browserControl = /(?:form|standalone)/i.test(String(input?.location||''));
+      rows.push({
+        sev:upload?'high':'med', badge:upload?'UPLOAD':auth?'AUTH':'INPUT', ep:endpoint, param:name,
+        conf:'observed UI', noise:rcLeadTelemetryNoise(endpoint,name), userFacing:true,
+        userPriority:upload||auth?6:browserControl?5:visibleControl?3:1,
+        risk:input?.explanation || `${type} control observed in ${input?.location||'page'}`
+      });
+    });
+  });
+  return rows;
+}
+function rcSurfaceLeadRows(surface) {
+  return rcSurfaceLeadRowsWithProfiles(surface, []);
+}
+function rcSurfaceLeadRowsWithProfiles(surface, profiles=[]) {
+  const s = surface || {};
+  const rows = rcProfileInputLeadRows(profiles);
+  rcArray(s.inputs).forEach(i => {
+    const m = RC_ATTACK[i.attack_type] || {
+      label:String(i.attack_type||'input').toUpperCase(),
+      sev:'med',
+      note:'Input worth testing'
+    };
+    rows.push({
+      sev:m.sev,
+      badge:m.label,
+      ep:i.endpoint,
+      param:i.param_name,
+      conf:i.confidence,
+      noise:rcLeadTelemetryNoise(i.endpoint,i.param_name),
+      risk:`${i.input_type||'input'} in ${i.location||'query'} — ${m.note}`
+    });
+  });
+  rcArray(s.reflected_params).forEach(r => rows.push({
+    sev:'high',
+    badge:'XSS',
+    ep:r.endpoint,
+    param:r.param_name,
+    conf:'reflected',
+    noise:rcLeadTelemetryNoise(r.endpoint,r.param_name),
+    risk:r.risk||'Value reflected in response'
+  }));
   const ord = {crit:0,high:1,med:2,low:3};
-  rows.sort((a,b) => (ord[a.sev]??9)-(ord[b.sev]??9));
-  const rowHTML = rows.map(l => `<button class="rc-lead sev-${l.sev}" onclick="navigateToView('endpoints')"><span class="rc-lead-badge">${esc(l.badge)}</span><span class="rc-lead-main"><span class="rc-lead-ep">${esc(l.ep||'')}</span>${l.param?`<span class="rc-lead-param">?${esc(l.param)}=</span>`:''}</span><span class="rc-lead-risk">${esc(l.risk)}</span><span class="rc-lead-conf ${esc(l.conf||'')}">${esc(l.conf||'')}</span></button>`).join('');
-  const unauthHTML = unauth.length ? `<div class="rc-lead-group"><div class="rc-lead-group-head"><span>Unauthenticated data exposure</span><span>${unauth.length} endpoints return data with no auth</span></div><div class="rc-lead-group-list">${unauth.slice(0,5).map(a => `<button class="rc-lead-mini" onclick="navigateToView('endpoints')"><span class="rc-lead-mini-ep">${esc(a.endpoint)}</span><span class="rc-lead-mini-tag">${esc(a.auth_type||'none')}</span></button>`).join('')}${unauth.length>5?`<button class="rc-lead-more" onclick="navigateToView('endpoints')">+${unauth.length-5} more</button>`:''}</div></div>` : '';
-  return `<section class="rc-leads">${head}<div class="rc-lead-tiles">${tileHTML}</div><div class="rc-lead-list">${rowHTML||'<div class="rc-empty">No injection candidates observed yet.</div>'}</div>${unauthHTML}</section>`;
+  rows.sort((a,b) => Number(Boolean(b.userFacing))-Number(Boolean(a.userFacing)) || Number(b.userPriority||0)-Number(a.userPriority||0) || Number(Boolean(a.noise))-Number(Boolean(b.noise)) || (ord[a.sev]??9)-(ord[b.sev]??9));
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = [row.badge,row.ep,row.param,row.risk].map(value => String(value||'').toLowerCase()).join('\u0000');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function rcRenderPentesterBrief(recon, targets, objectives, profiles, surface) {
+  const pages = rcArray(recon?.pages);
+  const workflows = rcArray(recon?.workflows);
+  const roles = rcArray(recon?.roles);
+  const objects = rcArray(recon?.objects);
+  const inputCount = Number(surface?.summary?.total_inputs) || rcArray(surface?.inputs).length || rcArray(profiles).filter(profile => profile?.has_input).length;
+  const userControls = rcProfileInputLeadRows(profiles).filter(row => !row.noise).length;
+  const grounded = rcArray(targets).filter(target => target?.met).length;
+  const open = rcArray(objectives).length;
+  const observedTitle = `${pages.length || profiles.length} analyzed page${(pages.length || profiles.length)===1?'':'s'} · ${userControls} user-facing control${userControls===1?'':'s'}`;
+  const inferredTitle = `${roles.length} actor${roles.length===1?'':'s'} · ${objects.length} object${objects.length===1?'':'s'} · ${workflows.length} workflow${workflows.length===1?'':'s'}`;
+  const next = objectives?.[0]?.question || 'No open evidence objective is currently recorded.';
+  return `<div class="rc-operator-brief">
+    <div class="rc-operator-brief-card"><div class="rc-operator-brief-kicker">Observed</div><div class="rc-operator-brief-title">${esc(observedTitle)}</div><div class="rc-operator-brief-copy">Captured routes, traffic, browser visits, and analyzed profiles. These are the safest facts to use when planning manual tests.</div><div class="rc-operator-brief-meta">Direct evidence · ${inputCount} total captured field${inputCount===1?'':'s'} · telemetry/system noise de-prioritized</div></div>
+    <div class="rc-operator-brief-card inferred"><div class="rc-operator-brief-kicker">Inference, not proof</div><div class="rc-operator-brief-title">${esc(inferredTitle)}</div><div class="rc-operator-brief-copy">AOBTD's current interpretation of how the application works. Use it to orient testing, but do not treat confidence as proof.</div><div class="rc-operator-brief-meta">${grounded}/${targets.length} evidence gates grounded</div></div>
+    <div class="rc-operator-brief-card unknown"><div class="rc-operator-brief-kicker">Unknown / next question</div><div class="rc-operator-brief-title">${esc(next)}</div><div class="rc-operator-brief-copy">An explicit coverage gap. Copilot can explain the missing evidence or propose one bounded next step.</div><div class="rc-operator-brief-meta">${open} open objective${open===1?'':'s'} · not a vulnerability claim</div></div>
+  </div>`;
+}
+function rcLeadConfirmedFinding(lead, findings=cache.findings||[]) {
+  const aliases={
+    SQLI:['sqli','sql_injection','sql injection'],
+    XSS:['xss','cross_site_scripting','cross-site scripting'],
+    SSRF:['ssrf','server_side_request_forgery'],
+    RCE:['rce','remote_code_execution'],
+    XXE:['xxe'],SSTI:['ssti'],PATH:['path_traversal','traversal'],
+    IDOR:['idor','bola'],REDIR:['open_redirect']
+  }[String(lead?.badge||'').toUpperCase()]||[String(lead?.badge||'').toLowerCase()];
+  const route=String(lead?.ep||'').replace(/^[A-Z]+\s+/i,'').trim().toLowerCase();
+  const param=String(lead?.param||'').trim().toLowerCase();
+  return rcArray(findings).find(finding=>{
+    if(String(finding?.confidence||'').toLowerCase()!=='confirmed')return false;
+    const type=String(finding?.vuln_type||'').toLowerCase();
+    if(!aliases.some(alias=>type.includes(alias)))return false;
+    const findingParam=String(finding?.param_name||'').trim().toLowerCase();
+    if(param&&findingParam&&param!==findingParam)return false;
+    const evidence=[finding?.endpoint_id,finding?.title,finding?.description,finding?.evidence].map(value=>String(value||'').toLowerCase()).join(' ');
+    return !route||route==='/'||evidence.includes(route);
+  })||null;
+}
+function rcLeadMatchingDirective(lead, strategy) {
+  const pathKey = raw => {
+    let value = String(raw||'').replace(/^endpoint:/i,'').replace(/^[A-Z]+\s+/i,'').trim();
+    if (!value) return '';
+    try { value = new URL(value).pathname; } catch (_) { value = value.split(/[?#]/,1)[0]; }
+    value = ('/'+value.replace(/^\/+/, '')).replace(/\/{2,}/g,'/');
+    return (value.length > 1 ? value.replace(/\/+$/,'') : value).toLowerCase();
+  };
+  const route = pathKey(lead?.ep);
+  const param = String(lead?.param||'').trim().toLowerCase();
+  const candidates = rcArray(strategy?.directives).filter(directive => {
+    const params = directive?.params || {};
+    const directivePaths = [directive?.url, params.url, params.url_template, params.endpoint_id, ...rcArray(directive?.grounded_in)].map(pathKey).filter(Boolean);
+    if (!route || !directivePaths.includes(route)) return false;
+    if (!param) return true;
+    const exactParam = String(params.param || params.field || '').trim().toLowerCase();
+    if (exactParam) return exactParam === param;
+    const reason = String(directive?.reason||'').toLowerCase();
+    return reason.includes(`?${param}=`) || reason.includes(`parameter ${param}`) || reason.includes(`field ${param}`);
+  });
+  const order = {running:0,pending:1,done:2,failed:3,skipped:4};
+  return candidates.sort((a,b)=>(order[String(a?.status||'').toLowerCase()]??9)-(order[String(b?.status||'').toLowerCase()]??9))[0] || null;
+}
+function rcDirectiveIsSecurityTest(directive) {
+  return /^probe_(?:param|idor|logic)$/.test(String(directive?.action||'').toLowerCase());
+}
+function rcLeadLifecycle(lead, strategy, authority, scanStatus) {
+  const finding = rcLeadConfirmedFinding(lead);
+  if (finding) return {state:'confirmed',label:'Confirmed finding',detail:'Verifier-backed result is available in Findings'};
+  const directive = rcLeadMatchingDirective(lead, strategy);
+  const status = String(directive?.status||'').toLowerCase();
+  const activeTest = rcDirectiveIsSecurityTest(directive);
+  if (status === 'done' && activeTest) return {state:'tested',label:'Active test completed',detail:directive.completed_at ? `Completed ${relTime(directive.completed_at)}` : 'Matching controlled probe completed'};
+  if (status === 'done') return {state:'observed',label:'Evidence collected',detail:'A matching fetch/reanalysis completed; no active probe ran'};
+  if (status === 'running') return {state:'running',label:activeTest?'Testing now':'Collecting evidence',detail:`A matching ${activeTest?'controlled probe':'collection directive'} is running`};
+  if (status === 'pending') return {state:'queued',label:activeTest?'Test queued':'Evidence queued',detail:directive.created_at ? `Queued ${relTime(directive.created_at)}` : 'Waiting for a scanner worker'};
+  if (status === 'failed' || status === 'skipped') return {state:'blocked',label:status === 'failed' ? 'Test failed' : 'Test skipped',detail:directive.result || 'Review the Strategy execution record'};
+  const reconOnly = String(authority||'').toLowerCase().startsWith('recon');
+  if (reconOnly) return {state:'observed',label:'Observed only',detail:'Recon maps this signal; an Active run is required to probe it'};
+  if (String(scanStatus||'').toLowerCase() === 'running') return {state:'observed',label:'Not scheduled',detail:'Detected automatically; no matching active-test directive is queued'};
+  return {state:'observed',label:'Not tested',detail:'No matching executed directive or confirmed finding'};
+}
+function rcUnverifiedSurfaceLeadRows(surface) {
+  return rcUnverifiedSurfaceLeadRowsWithProfiles(surface, []);
+}
+function rcUnverifiedSurfaceLeadRowsWithProfiles(surface, profiles=[]) {
+  return rcSurfaceLeadRowsWithProfiles(surface,profiles).filter(lead=>!rcLeadConfirmedFinding(lead));
+}
+function rcRenderLeads(surface, endpoints, profiles, strategy, authority, scanStatus) {
+  const head = `<div class="rc-leads-head"><div><div class="rc-leads-title">Priority testing leads</div><div class="rc-leads-sub">A pentester queue, not a vulnerability list. Unconfirmed input and reflection signals only. Signals are discovered automatically; a lead is only “tested” when a matching active-test directive completes.</div></div><div class="rc-leads-actions"><button class="rc-panel-link" onclick="navigateToView('strategy')">Open test plan</button><button class="rc-panel-link" onclick="navigateToView('findings')">Review in Findings</button></div></div>`;
+  if (!surface) return `<section class="rc-leads">${head}<div class="rc-empty">Correlating observed inputs, auth boundaries, and reflections…</div></section>`;
+  const s = surface || {};
+  const allRows = rcSurfaceLeadRowsWithProfiles(s,profiles);
+  const actionableRows = allRows.filter(row => !row.noise);
+  const telemetryNoise = allRows.length-actionableRows.length;
+  const rows = rcUnverifiedSurfaceLeadRowsWithProfiles(s,profiles).filter(row => !row.noise);
+  const graduated = actionableRows.length-rows.length;
+  const badges = new Map();
+  rows.forEach(row => badges.set(row.badge, (badges.get(row.badge) || 0) + 1));
+  const summaryHTML = (rows.length||graduated) ? `<div class="rc-lead-summary">${[...badges.entries()].map(([label,count]) => `<span class="rc-lead-pill"><b>${count}</b>${esc(label)}</span>`).join('')}<span class="rc-lead-note">${rows.length} unconfirmed signal${rows.length===1?'':'s'} · executed lifecycle first · user-facing controls next${graduated?' · '+graduated+' matched confirmed Finding'+(graduated===1?'':'s'):''}${telemetryNoise?' · '+telemetryNoise+' telemetry/system field'+(telemetryNoise===1?'':'s')+' de-prioritized':''}</span></div>` : '';
+  const explainer = `<div class="rc-leads-explainer"><strong>Lifecycle</strong><span>Observed signal</span><span class="rc-life-arrow">→</span><span>Queued</span><span class="rc-life-arrow">→</span><span>Running</span><span class="rc-life-arrow">→</span><span>Tested</span><span class="rc-life-arrow">→</span><span>Confirmed finding</span></div>`;
+  const lifecycleOrder = {confirmed:0,tested:1,running:2,queued:3,blocked:4,observed:5};
+  const visibleRows = actionableRows.map((lead,index)=>({lead,index,life:rcLeadLifecycle(lead,strategy,authority,scanStatus)})).sort((a,b)=>(lifecycleOrder[a.life.state]??9)-(lifecycleOrder[b.life.state]??9) || a.index-b.index).slice(0,6);
+  const rowHTML = visibleRows.map(item => { const l=item.lead,life=item.life; const destination=life.state==='confirmed'?'findings':'strategy'; return `<button class="rc-lead sev-${l.sev}" onclick="navigateToView('${destination}')"><span class="rc-lead-badge">${esc(l.badge)}</span><span class="rc-lead-main"><span class="rc-lead-ep">${esc(l.ep||'')}</span>${l.param?`<span class="rc-lead-param">?${esc(l.param)}=</span>`:''}</span><span class="rc-lead-risk">${esc(l.risk)}</span><span class="rc-lead-state ${esc(life.state)}"><strong>${esc(life.label)}</strong><small title="${esc(life.detail)}">${esc(life.detail)}</small></span></button>`; }).join('');
+  return `<section class="rc-leads">${head}${explainer}${summaryHTML}<div class="rc-lead-list">${rowHTML||'<div class="rc-empty">No prioritized injection or reflection signals observed.</div>'}</div></section>`;
 }
 function rcRenderSurface(surface, endpoints, profiles, originData) {
   const data = surface || {};
@@ -9698,7 +10646,9 @@ function rcToggleJournalRaw() {
 }
 
 // ─── OVERVIEW ───
-function renderOverview(el) {
+let pageOverviewHTMLCache = '';
+let pageOverviewCacheScanID = null;
+async function renderOverview(el) {
   const s = cache.stats;
   const ts = s?.traffic || {};
   const fs = s?.findings || {};
@@ -9707,6 +10657,10 @@ function renderOverview(el) {
   const pr = cache.profiles || [];
   const ai = cache.aiStats || {};
   const sc = cache.scan || {};
+  const overviewScanKey = sc.scan_id || sc.id || scanID;
+  const preservedPageOverview = pageOverviewCacheScanID === overviewScanKey
+    ? pageOverviewHTMLCache
+    : '';
 
   const totalFindings = (fs.critical||0)+(fs.high||0)+(fs.medium||0)+(fs.low||0)+(fs.info||0);
   const confirmedFindings = (cache.findings||[]).filter(f => (f.confidence||'').toLowerCase()==='confirmed').length;
@@ -9878,11 +10832,14 @@ function renderOverview(el) {
       What a user sees on each page, and which endpoints each page talks to.
       Grouped by Referer so you can map the business surface visually.
     </div>
-    <div id="pageOverviewList" style="color:var(--text2);font-size:12px">Loading…</div>
+    <div id="pageOverviewList" style="color:var(--text2);font-size:12px">${preservedPageOverview || 'Loading…'}</div>
   </div>`;
 
   el.innerHTML = html;
-  loadPageOverview();
+  // This secondary request materially changes the page height. Return it to
+  // renderView so shared scroll preservation stays active until the Overview
+  // page is genuinely finished, instead of releasing at the loading shell.
+  await loadPageOverview();
 }
 
 // loadPageOverview fetches /api/page-overview and renders into #pageOverviewList.
@@ -9890,11 +10847,23 @@ function renderOverview(el) {
 // include a per-input heuristic `explanation` so "what does this input do?"
 // shows up without any LLM call.
 async function loadPageOverview() {
+  const requestScanID = scanID;
   const root = document.getElementById('pageOverviewList');
   if (!root) return;
   const data = await api('/api/page-overview').catch(() => null);
-  if (!data || !data.pages || data.pages.length === 0) {
+  if (scanID !== requestScanID || !root.isConnected) return;
+  if (!data) {
+    // A transient refresh failure must not replace a fully rendered, tall
+    // Overview with an error-sized placeholder. Keep the last good projection.
+    if (pageOverviewCacheScanID !== requestScanID || !pageOverviewHTMLCache) {
+      root.textContent = 'Pages could not be refreshed. The rest of Overview is still available.';
+    }
+    return;
+  }
+  if (!data.pages || data.pages.length === 0) {
     root.textContent = 'No pages yet. Pages appear after the crawler/proxy captures HTML responses.';
+    pageOverviewCacheScanID = requestScanID;
+    pageOverviewHTMLCache = root.innerHTML;
     return;
   }
 
@@ -9985,6 +10954,8 @@ async function loadPageOverview() {
   });
 
   root.innerHTML = html;
+  pageOverviewCacheScanID = requestScanID;
+  pageOverviewHTMLCache = html;
 }
 
 // ─── ENDPOINTS ───
@@ -10218,13 +11189,25 @@ function issueSeverity(text) {
 function renderKnowledge(el) {
   const profiles = cache.profiles || [];
   const understanding = cache.understanding || {};
+	const sc = cache.scan || {};
+	const pipeline = sc.pipeline || {};
 
   // Sub-header: how many were AI-analyzed vs raw
   const total = profiles.length;
   if (!total) {
+		const state = String(pipeline.analysis_state || 'waiting_for_warmup');
+		const configured = sc.llm_configured === true;
+		const detail = !configured
+			? 'This scan is crawl-only. Start a scan with an LLM provider to create semantic endpoint profiles.'
+			: state === 'waiting_for_warmup'
+			? `Discovery is warming up before analysis begins. ${Number(pipeline.analysis_ready)||0} endpoint families are ready and ${Number(pipeline.analysis_deferred)||0} are below the current relevance threshold.`
+			: state === 'active'
+			? `The analyzer is processing prioritized endpoint families now. ${Number(pipeline.analysis_ready)||0} remain queued.`
+			: 'No semantic profile was produced by this scan. Review the analysis queue and model-call log for the exact terminal state.';
     el.innerHTML = `<div class="mm-empty">
       <h3>No analyzed endpoints yet</h3>
-      <p>The Knowledge base fills as the analyzer tags pages with a purpose, inputs, and likely issues. Run a scan with an LLM provider configured.</p>
+		<p>${esc(detail)}</p>
+		${configured ? `<div class="rc-chip-row" style="justify-content:center;margin-top:12px"><span class="rc-chip">${esc(pipeline.phase || 'pipeline starting')}</span><span class="rc-chip">${Number(pipeline.analysis_ready)||0} queued</span></div>` : ''}
     </div>`;
     return;
   }
@@ -10570,8 +11553,57 @@ function renderChainsView(el) {
   el.innerHTML = html;
 }
 
+function renderFindingsTestingLeads(surface) {
+  const allLeads = rcSurfaceLeadRows(surface);
+  const leads = rcUnverifiedSurfaceLeadRows(surface);
+  const graduated = allLeads.length-leads.length;
+  if (!leads.length && !graduated) return '';
+  const visible = leads.slice(0, 20);
+  const remaining = leads.length - visible.length;
+  return `<section class="findings-leads" aria-label="Unverified Recon testing leads">
+    <div class="findings-leads-head">
+      <div class="findings-leads-copy">
+        <div class="findings-leads-kicker">Recon handoff</div>
+        <div class="findings-leads-title">Unverified testing leads <span class="findings-leads-count">${leads.length}</span></div>
+        <div class="findings-leads-sub">Recon candidates are passive classifications, not findings or queued jobs. Supported classes are tested when Phase 6 starts; confirmed matches leave this list, while unsupported signals remain for triage, and the Findings counts above stay unchanged until the verifier reproduces an issue with evidence.${graduated?` ${graduated} lead${graduated===1?' has':'s have'} already moved into confirmed Findings.`:''}</div>
+      </div>
+      <button class="findings-leads-action" onclick="navigateToView('recon')">Review in Recon</button>
+    </div>
+    <div class="findings-leads-list">
+      ${visible.map(lead => `<button class="findings-testing-lead sev-${escAttr(lead.sev)}" data-endpoint="${escAttr(lead.ep||'')}" onclick="openSurfaceTestingLead(this)">
+        <span class="findings-testing-lead-badge">${esc(lead.badge)}</span>
+        <span class="findings-testing-lead-target">
+          <span class="findings-testing-lead-endpoint">${esc(lead.ep||'Unknown endpoint')}</span>
+          ${lead.param ? `<span class="findings-testing-lead-param">?${esc(lead.param)}=</span>` : ''}
+        </span>
+        <span class="findings-testing-lead-risk">${esc(lead.risk)}</span>
+        <span class="findings-testing-lead-state">${esc(lead.conf||'unverified')}</span>
+      </button>`).join('')}
+      ${remaining > 0 ? `<button class="findings-leads-action" onclick="navigateToView('endpoints')">View ${remaining} more in Endpoints</button>` : ''}
+    </div>
+  </section>`;
+}
+
+function openSurfaceTestingLead(button) {
+  const logicalEndpoint = String(button?.dataset?.endpoint || '').trim();
+  const match = logicalEndpoint.match(/^([A-Z]+)\s+(.+)$/i);
+  if (match) {
+    const method = match[1].toUpperCase();
+    const path = match[2];
+    const endpoint = (cache.endpoints || []).find(item =>
+      String(item.method||'').toUpperCase() === method && String(item.path||'') === path
+    );
+    if (endpoint?.hash) {
+      showEndpointDetail(endpoint.hash);
+      return;
+    }
+  }
+  navigateToView('endpoints');
+}
+
 function renderFindings(el) {
   const findings = cache.findings || [];
+  const surface = cache.surface || null;
   const fs = cache.stats?.findings || {};
 
   const confirmed = findings.filter(f => (f.confidence||'').toLowerCase() === 'confirmed');
@@ -10588,70 +11620,78 @@ function renderFindings(el) {
     </div>`;
 
   if (!findings.length) {
-    html += '<div class="empty-state"><p>No verified findings yet. The verifier agent runs after LLM analysis to test XSS, SQLi, CSRF, and open redirect issues with real payloads.</p></div>';
-    el.innerHTML = html;
-    return;
-  }
-
-  // Walkthrough launcher — primary demo entrypoint from the Findings view.
-  // Prefers confirmed-only; falls back to confirmed + possible if the scan
-  // hasn't produced a confirmed finding yet.
-  const walkthroughCount = confirmed.length || (confirmed.length + possible.length);
-  const mode = confirmed.length > 0 ? 'confirmed' : 'confirmed + possible';
-  const launchFn = confirmed.length > 0 ? 'startWalkthrough()' : 'startWalkthrough(true)';
-  html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 14px;background:linear-gradient(90deg, rgba(188,140,255,0.08), transparent);border:1px solid var(--border);border-left:3px solid var(--purple);border-radius:4px">
-    <div style="flex:1">
-      <div style="font-size:13px;font-weight:600;color:var(--text)">Walkthrough mode</div>
-      <div style="font-size:11px;color:var(--text2);margin-top:2px">Step through ${walkthroughCount} ${esc(mode)} finding${walkthroughCount===1?'':'s'} one at a time — severity-sorted, keyboard-navigable. Good for demos + client walkthroughs.</div>
-    </div>
-    <button class="refresh-btn" onclick="${launchFn}" style="border-color:var(--purple);color:var(--purple)">Start walkthrough &#9654;</button>
-  </div>`;
-
-  // Show confirmed first, then possible, then dismissed
-  const sorted = [...confirmed, ...possible, ...dismissed];
-
-  // Columns: Severity · Title (with reasoner subline) · Vector · Endpoint.
-  // Confidence is conveyed inline (dimmed dismissed rows + a small POSSIBLE
-  // tag inline next to the title) instead of a dedicated column, because
-  // the column was nearly always "CONFIRMED" given the confirmed-first sort.
-  html += `<div class="table-wrap"><table>
-    <tr><th>Severity</th><th>Title</th><th>Vector</th><th>Endpoint</th></tr>`;
-  sorted.forEach(f => {
-    const conf = (f.confidence||'').toLowerCase();
-    const rowStyle = conf === 'dismissed' ? 'opacity:0.5;' : '';
-    const { title: cleanTitle, reasoner } = splitVia(f.title);
-    // Inline confidence chip only for non-confirmed rows — confirmed is the
-    // baseline so a chip on every row would just be noise.
-    const confInline = (conf && conf !== 'confirmed')
-      ? ` ${confidenceBadge(f.confidence)}`
-      : '';
-    const reasonerLine = reasoner
-      ? `<div style="font-size:10.5px;color:var(--text2);margin-top:2px;font-family:var(--font-mono);letter-spacing:0.04em">via ${esc(reasoner)}</div>`
-      : '';
-    html += `<tr class="clickable" style="${rowStyle}" onclick="showFindingDetail(${f.id})">
-      <td><span class="sev-${f.severity}">${(f.severity||'?').toUpperCase()}</span></td>
-      <td>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span>${esc(cleanTitle)}</span>${confInline}
+    html += '<div class="empty-state"><p>No verifier-generated findings yet. Recon candidates, when present, are listed below and do not count as findings until actively verified.</p></div>';
+  } else {
+    // Walkthrough launcher — primary demo entrypoint from the Findings view.
+    // Prefers confirmed-only; falls back to confirmed + possible if the scan
+    // hasn't produced a confirmed finding yet.
+    const walkthroughCount = confirmed.length || (confirmed.length + possible.length);
+    const mode = confirmed.length > 0 ? 'confirmed' : 'confirmed + possible';
+    const launchFn = confirmed.length > 0 ? 'startWalkthrough()' : 'startWalkthrough(true)';
+    if (walkthroughCount > 0) {
+      html += `<section class="walkthrough-launcher" aria-label="Finding walkthrough">
+        <div class="walkthrough-launch-copy">
+          <div class="walkthrough-launch-eyebrow">Presentation mode</div>
+          <div class="walkthrough-launch-title">Walk through the evidence</div>
+          <div class="walkthrough-launch-description">Step through ${walkthroughCount} ${esc(mode)} finding${walkthroughCount===1?'':'s'} in severity order. Use the arrow keys to move between findings.</div>
         </div>
-        ${reasonerLine}
-      </td>
-      <td>${vectorChip(f.vuln_type)}</td>
-      <td class="mono ellipsis" style="max-width:200px">${esc(f.endpoint_id||'')}</td>
-    </tr>`;
-  });
-  html += `</table></div>`;
+        <button class="walkthrough-launch-btn" onclick="${launchFn}"><span>Start walkthrough</span><span class="arrow" aria-hidden="true">&#8594;</span></button>
+      </section>`;
+    }
+
+    // Show confirmed first, then possible, then dismissed
+    const sorted = [...confirmed, ...possible, ...dismissed];
+
+    // Columns: Severity · Title (with reasoner subline) · Vector · Endpoint.
+    // Confidence is conveyed inline (dimmed dismissed rows + a small POSSIBLE
+    // tag inline next to the title) instead of a dedicated column, because
+    // the column was nearly always "CONFIRMED" given the confirmed-first sort.
+    html += `<div class="table-wrap"><table>
+      <tr><th>Severity</th><th>Title</th><th>Vector</th><th>Endpoint</th></tr>`;
+    sorted.forEach(f => {
+      const conf = (f.confidence||'').toLowerCase();
+      const rowStyle = conf === 'dismissed' ? 'opacity:0.5;' : '';
+      const { title: cleanTitle, reasoner } = splitVia(f.title);
+      // Inline confidence chip only for non-confirmed rows — confirmed is the
+      // baseline so a chip on every row would just be noise.
+      const confInline = (conf && conf !== 'confirmed')
+        ? ` ${confidenceBadge(f.confidence)}`
+        : '';
+      const reasonerLine = reasoner
+        ? `<div style="font-size:10.5px;color:var(--text2);margin-top:2px;font-family:var(--font-mono);letter-spacing:0.04em">via ${esc(reasoner)}</div>`
+        : '';
+      html += `<tr class="clickable" style="${rowStyle}" onclick="showFindingDetail(${f.id})">
+        <td><span class="sev-${f.severity}">${(f.severity||'?').toUpperCase()}</span></td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span>${esc(cleanTitle)}</span>${confInline}
+          </div>
+          ${reasonerLine}
+        </td>
+        <td>${vectorChip(f.vuln_type)}</td>
+        <td class="mono ellipsis" style="max-width:200px">${esc(f.endpoint_id||'')}</td>
+      </tr>`;
+    });
+    html += `</table></div>`;
+  }
+  html += renderFindingsTestingLeads(surface);
   el.innerHTML = html;
 }
 
 // ─── TRAFFIC ───
 let trafficFilter = 'all';
 let trafficData = null;
+let trafficRefreshNeeded = false;
 
 async function renderTraffic(el) {
-  if (!trafficData) {
-    el.innerHTML = '<div class="loading">Loading traffic...</div>';
-    trafficData = await api('/api/traffic?limit=500');
+  if (!trafficData || trafficRefreshNeeded) {
+    const alreadyMounted = !!el.querySelector('.toolbar, .table-wrap, .empty-state');
+    if (!alreadyMounted) {
+      el.innerHTML = '<div class="loading">Loading traffic...</div>';
+    }
+    const freshTraffic = await api('/api/traffic?limit=500');
+    if (freshTraffic !== null && freshTraffic !== undefined) trafficData = freshTraffic;
+    trafficRefreshNeeded = false;
   }
   const entries = trafficData || [];
   let filtered = entries;
@@ -10789,6 +11829,7 @@ function renderLive(el) {
     // keep the waiting state since the next frame really is imminent.
     const status = (cache.scan?.status || '').toLowerCase();
     const isLive = (status === 'running' || status === 'pending' || status === '');
+    const terminalDetail = String(cache.scan?.terminal_detail || '').trim();
     let browserPlaceholder;
     if (isLive) {
       browserPlaceholder = `
@@ -10800,7 +11841,7 @@ function renderLive(el) {
     } else {
       const label = status === 'completed' ? 'Scan completed' :
                     status === 'interrupted' ? 'Scan interrupted' :
-                    status === 'incomplete' ? 'Scan incomplete — convergence limit reached' :
+                    status === 'incomplete' ? 'Scan incomplete' :
                     status === 'failed' ? 'Scan failed' :
                     'Scan finished';
       const finishedRel = cache.scan?.finished_at ? relTime(cache.scan.finished_at) : '';
@@ -10809,6 +11850,7 @@ function renderLive(el) {
         <div class="live-empty-state">
           <div class="live-empty-status ${statusClass}">${esc(label)}</div>
           <div class="live-empty-title">Live browser stream is archived.</div>
+          ${terminalDetail ? `<div class="live-empty-copy" style="color:var(--yellow)">${esc(terminalDetail)}</div>` : ''}
           <div class="live-empty-copy">
             This pane only shows frames while the crawler is actively driving a browser.
             Use Overview for the scan result, or launch a new run to watch the browser live.
@@ -10824,6 +11866,7 @@ function renderLive(el) {
         </div>`;
     }
     el.innerHTML = `
+      ${!isLive && terminalDetail ? `<div class="live-terminal-banner"><b>Why this run is incomplete</b>${esc(terminalDetail)}</div>` : ''}
       <div class="live-grid">
         <div class="live-pane browser-theatre-pane">
           <div class="pane-header browser-theatre-header">
@@ -11626,10 +12669,15 @@ async function updateBrowserFrame() {
     const res = await fetch(`/api/live/frames?scan_id=${scanID}`, { cache: 'no-store' });
     if (!res.ok) return;
     const data = await res.json();
-    const frames = Array.isArray(data?.frames) ? data.frames.slice(0, 4) : [];
     const sessionActive = data?.session_active === true || (data?.status === 'legacy' && data?.active === true);
     const frameHasImage = frame => frame?.has_image === true || !('has_image' in (frame || {}));
     const frameIsActive = frame => data?.active === true && frame?.active === true;
+    const availableFrames = Array.isArray(data?.frames) ? data.frames : [];
+    // Open tabs remain visible while their first paint is pending. Closed tabs
+    // only earn a replay tile when they have real pixels; otherwise a handful
+    // of empty retained entries would force the useful pages into a 2x2 grid.
+    const visibleFrames = availableFrames.filter(frame => frameIsActive(frame) || frameHasImage(frame));
+    const frames = (visibleFrames.length ? visibleFrames : availableFrames.slice(0, 1)).slice(0, 4);
     const activeFrames = frames.filter(frameIsActive);
     const activeFrameCount = activeFrames.length;
     const savedFrameCount = frames.length - activeFrameCount;
@@ -12052,9 +13100,9 @@ async function renderStrategyView(el) {
   // just wait for the first cycle.
   if (!hyps.length && !cycles.length) {
     el.innerHTML = `<div class="strat-empty">
-      <p style="font-size:14px;color:var(--text)">The Sovereign Strategist hasn't produced any plans yet.</p>
-      <p style="margin-top:8px">The Strategist runs every few minutes during a scan and emits hypotheses about the target plus directives for specialist agents.</p>
-      <p style="margin-top:8px;font-size:11px">Start a new scan and leave it running — the first cycle fires within the first minute after the world model has enough endpoints to reason about.</p>
+      <p style="font-size:14px;color:var(--text)">No evidence-backed test plan has been produced yet.</p>
+      <p style="margin-top:8px">Strategy starts after the scanner has enough observed surface to form a testable hypothesis. Until then, use Recon and Copilot to inspect the current input and feature inventory.</p>
+      <p style="margin-top:8px;font-size:11px">Nothing on this page implies that an active test has run.</p>
     </div>`;
     return;
   }
@@ -12080,13 +13128,16 @@ async function renderStrategyView(el) {
   const scrollHyps   = el.querySelector('.strat-col:nth-child(1) .strat-panel-body')?.scrollTop ?? 0;
   const scrollCycles = el.querySelector('.strat-col:nth-child(2) .strat-panel-body')?.scrollTop ?? 0;
 
-  let html = `<div class="strat-grid">
+  let html = `<div class="strat-shell">
+    ${renderStrategyOverview(hyps, directives, cycles)}
+    <div class="strat-lifecycle"><b>How to read this</b><span>Observed evidence</span><span class="rc-life-arrow">→</span><span>Testable hypothesis</span><span class="rc-life-arrow">→</span><span>Queued directive</span><span class="rc-life-arrow">→</span><span>Executed result</span><span class="rc-life-arrow">→</span><span>Confirmed or refuted belief</span></div>
+    <div class="strat-grid">
     <div class="strat-col">
       <div class="strat-panel">
         <div class="strat-panel-header">
-          <span>Hypotheses</span>
+          <strong>1 · Test plan</strong>
           <span class="spacer"></span>
-          <span style="text-transform:none;color:var(--text2);font-size:10px">${hyps.filter(h=>h.status==='active').length} active &middot; ${hyps.filter(h=>h.status==='confirmed').length} confirmed &middot; ${hyps.filter(h=>h.status==='refuted').length} refuted</span>
+          <small>${hyps.filter(h=>h.status==='active').length} open · ${hyps.filter(h=>['confirmed','refuted'].includes(h.status)).length} settled</small>
         </div>
         <div class="strat-panel-body">
           ${renderTargetModelBrief(cache.understanding || {}, hyps, directives)}
@@ -12098,16 +13149,27 @@ async function renderStrategyView(el) {
     <div class="strat-col">
       <div class="strat-panel">
         <div class="strat-panel-header">
-          <span>Reasoning trace</span>
+          <strong>2 · Execution status</strong>
           <span class="spacer"></span>
-          <span style="text-transform:none;color:var(--text2);font-size:10px">${cycles.length} cycle${cycles.length !== 1 ? 's' : ''}</span>
+          <small>${directives.length} targeted directive${directives.length===1?'':'s'}</small>
         </div>
         <div class="strat-panel-body">
+          ${renderStrategyDirectiveQueue(directives)}
+        </div>
+      </div>
+      <div class="strat-panel">
+        <div class="strat-panel-header">
+          <strong>3 · Decision audit</strong>
+          <span class="spacer"></span>
+          <small>${cycles.length} planning cycle${cycles.length !== 1 ? 's' : ''}</small>
+        </div>
+        <div class="strat-panel-body">
+          <div class="strat-audit-note">Why AOBTD changed priority or emitted a test. This trace explains the plan; it is not proof that the target is vulnerable.</div>
           ${renderStrategistCycles(cycles)}
         </div>
       </div>
     </div>
-  </div>`;
+  </div></div>`;
   el.innerHTML = html;
 
   // Restore scroll after innerHTML rebuild. Run synchronously — browsers
@@ -12117,6 +13179,27 @@ async function renderStrategyView(el) {
   const cycBody = el.querySelector('.strat-col:nth-child(2) .strat-panel-body');
   if (hypBody) hypBody.scrollTop = scrollHyps;
   if (cycBody) cycBody.scrollTop = scrollCycles;
+}
+
+function renderStrategyOverview(hyps, directives, cycles) {
+  const statusCount = status => directives.filter(d => String(d.status||'').toLowerCase() === status).length;
+  const settled = hyps.filter(h => ['confirmed','refuted'].includes(String(h.status||'').toLowerCase())).length;
+  return `<header class="strat-overview">
+    <div class="strat-overview-copy"><div class="strat-overview-eyebrow">Pentester support // evidence-directed testing</div><h2>Testing strategy</h2><p>A readable link between what the scan observed, what it currently suspects, which controlled actions were scheduled, and what actually completed.</p></div>
+    <div class="strat-overview-stat"><b>${hyps.filter(h=>String(h.status||'').toLowerCase()==='active').length}</b><span>open hypotheses</span></div>
+    <div class="strat-overview-stat"><b>${statusCount('pending')+statusCount('running')}</b><span>queued / running</span></div>
+    <div class="strat-overview-stat"><b>${statusCount('done')}</b><span>directives completed</span></div>
+    <div class="strat-overview-stat"><b>${settled}</b><span>beliefs settled</span></div>
+  </header>`;
+}
+
+function renderStrategyDirectiveQueue(directives) {
+  const statuses = ['pending','running','done','failed','skipped'];
+  const count = status => directives.filter(d => String(d.status||'').toLowerCase() === status).length;
+  const summary = `<div class="strat-execution-summary">${[['pending','queued'],['running','running'],['done','completed'],['failed','failed']].map(([status,label])=>`<div><b>${count(status)}</b><span>${label}</span></div>`).join('')}</div>`;
+  if (!directives.length) return `${summary}<div class="strat-empty">No targeted directive has been queued. Hypotheses without directives are ideas, not executed tests.</div>`;
+  const ordered = directives.slice().sort((a,b) => statuses.indexOf(String(a.status||'').toLowerCase()) - statuses.indexOf(String(b.status||'').toLowerCase()));
+  return `${summary}${ordered.map(d => renderDirective(d, true)).join('')}`;
 }
 
 function renderTargetModelBrief(understanding, hyps, directives) {
@@ -12130,15 +13213,15 @@ function renderTargetModelBrief(understanding, hyps, directives) {
   const appLabel = appType || 'Application model forming';
   const appSummary = summary || 'AOBTD is still correlating pages, APIs, roles, and workflows into an application-level model.';
   return `<div class="strat-target-model">
-    <div class="eyebrow">What AOBTD understands right now</div>
+    <div class="eyebrow">Evidence basis for this plan</div>
     <div class="title">${esc(appLabel)}</div>
     <div class="summary">${esc(appSummary)}</div>
     ${areas.length ? `<div class="areas">${areas.map(a => `<span>${esc(a.name)} · priority ${a.priority||0}</span>`).join('')}</div>` : ''}
     <div class="logic">
       <span><strong>${active}</strong> beliefs still being tested</span>
-      <span><strong>${completed}/${directives.length}</strong> targeted tests observed</span>
+      <span><strong>${completed}/${directives.length}</strong> targeted directives completed</span>
       <span><strong>${settled}</strong> beliefs settled by evidence</span>
-      <span>Understanding → hypothesis → targeted test → revised belief</span>
+      <span>Understanding → hypothesis → targeted directive → result → revised belief</span>
     </div>
   </div>`;
 }
@@ -12153,14 +13236,17 @@ function renderThoughtTrail(trail) {
 	const questions = Array.isArray(trail.open_questions) ? trail.open_questions : [];
   const hasAnything = workflows.length || decisions.length || hyps.length || findings.length;
   if (!hasAnything && !trail.summary) return '';
+  const trailSummary = String(trail.summary || 'AOBTD is still collecting enough evidence to explain its path through the target.')
+    .replace(/targeted tests/gi, 'targeted directives')
+    .replace(/targeted test/gi, 'targeted directive');
 
   return `<div class="thought-trail">
     <div class="eyebrow">Pentester trail</div>
-    <div class="summary">${esc(trail.summary || 'AOBTD is still collecting enough evidence to explain its path through the target.')}</div>
+    <div class="summary">${esc(trailSummary)}</div>
     <div class="metrics">
       ${renderThoughtMetric(m.workflow_count || workflows.length || 0, 'workflows')}
       ${renderThoughtMetric(m.active_hypotheses || 0, 'active hunches')}
-      ${renderThoughtMetric(m.targeted_tests || 0, 'targeted tests')}
+      ${renderThoughtMetric(m.targeted_tests || 0, 'targeted directives')}
       ${renderThoughtMetric(m.guarded_actions || 0, 'held back')}
       ${renderThoughtMetric(m.confirmed_findings || 0, 'confirmed')}
       ${renderThoughtMetric(m.high_priority_workflows || 0, 'high-priority')}
@@ -12227,8 +13313,8 @@ function renderTrailHypotheses(hyps) {
           <span class="chip">${esc(h.status || 'active')}</span>
           <span class="chip">${esc(h.confidence ?? 0)}%</span>
 		  ${h.evidence_grade ? `<span class="chip">evidence: ${esc(h.evidence_grade)}</span>` : ''}
-		  ${(h.tests_pending||0) > 0 ? `<span class="chip">${esc(h.tests_pending)} pending</span>` : ''}
-		  ${(h.tests_completed||0) > 0 ? `<span class="chip">${esc(h.tests_completed)} tested</span>` : ''}
+		  ${(h.tests_pending||0) > 0 ? `<span class="chip">${esc(h.tests_pending)} directives pending</span>` : ''}
+		  ${(h.tests_completed||0) > 0 ? `<span class="chip">${esc(h.tests_completed)} directives completed</span>` : ''}
 		  ${(h.confirmed_proofs||0) > 0 ? `<span class="chip">${esc(h.confirmed_proofs)} proof${h.confirmed_proofs===1?'':'s'}</span>` : ''}
         </div>
 		${h.next_question ? `<div style="margin-top:6px;color:var(--text2)"><span style="color:var(--accent)">NEXT:</span> ${esc(h.next_question)}</div>` : ''}
@@ -12263,9 +13349,10 @@ function renderHypotheses(hyps, byHyp, eventsByHyp = {}) {
     const dirs = (byHyp[h.id] || []);
     const eventHtml = renderHypothesisEvents(eventsByHyp[h.id] || []);
     const dirHtml = dirs.length
-      ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
-           <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Directives testing this (${dirs.length})</div>
-           ${dirs.map(renderDirective).join('')}
+      ? `<div class="evidence" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">
+           <span>${dirs.length} linked directive${dirs.length===1?'':'s'}</span>
+           ${['pending','running','done','failed','skipped'].map(status=>{const n=dirs.filter(d=>String(d.status||'').toLowerCase()===status).length;return n?`<span>${n} ${status}</span>`:'';}).join('')}
+           <span>details in Execution status →</span>
          </div>`
       : '';
 
@@ -12298,8 +13385,8 @@ function renderHypothesisEvent(ev) {
     created: 'Created',
     revised: 'Revised',
     status_changed: 'Status',
-    directive_queued: 'Queued test',
-    directive_done: 'Observed'
+    directive_queued: 'Directive queued',
+    directive_done: 'Directive completed'
   }[ev.event_type] || (ev.event_type || 'Event');
   const conf = renderEventConfidence(ev);
   const status = renderEventStatus(ev);
@@ -12334,6 +13421,7 @@ function renderEventStatus(ev) {
 
 function renderDirective(d) {
   const status = (d.status || '').toLowerCase();
+  const statusLabel = {pending:'QUEUED',running:'RUNNING',done:'COMPLETED',failed:'FAILED',skipped:'SKIPPED'}[status] || status.toUpperCase();
   const grounded = (d.grounded_in || []).slice(0, 4).map(g =>
     `<span>${esc(g)}</span>`).join('');
   const urlBlock = d.url
@@ -12344,13 +13432,13 @@ function renderDirective(d) {
   return `<div class="strat-dir ${status}">
     <div class="head">
       <span class="action">${esc((d.action || '').toUpperCase())}</span>
-      <span class="status">${esc(status.toUpperCase())}</span>
+      <span class="status">${esc(statusLabel)}</span>
       <span style="flex:1"></span>
-      <span style="font-size:10px;color:var(--text2)">pri ${d.priority}</span>
+      <span style="font-size:10px;color:var(--text2)">P${d.priority}${d.created_at ? ` · ${esc(relTime(d.completed_at || d.created_at))}` : ''}</span>
     </div>
     ${urlBlock}
     ${d.reason ? `<div class="reason">${esc(d.reason)}</div>` : ''}
-    ${d.result ? `<div style="font-size:10px;color:var(--text2);margin-top:3px;font-family:monospace">→ ${esc(d.result)}</div>` : ''}
+    ${d.result ? `<div style="font-size:10px;color:var(--text2);margin-top:3px;font-family:monospace">Result → ${esc(d.result)}</div>` : status==='pending' ? '<div style="font-size:10px;color:var(--text2);margin-top:4px">Waiting for a scanner worker; no request result exists yet.</div>' : status==='running' ? '<div style="font-size:10px;color:var(--yellow);margin-top:4px">The matching controlled test is executing now.</div>' : ''}
     ${grounded ? `<div class="grounded">${grounded}</div>` : ''}
   </div>`;
 }
@@ -13091,6 +14179,59 @@ var targetTreeState = {
   model:null, query:'', filter:'all', expanded:new Set(), selected:null,
   byID:new Map(), endpointLimit:80,
 };
+
+function decodeGraphFocusValue(raw) {
+  let value=String(raw||'').trim();
+  // Evidence buttons historically handed this function encodeURIComponent()
+  // output. Decode at most twice so old saved UI actions still work without
+  // turning an ordinary percent-bearing route into an exception.
+  for(let attempt=0;attempt<2&&/%[0-9a-f]{2}/i.test(value);attempt++){
+    try{const decoded=decodeURIComponent(value);if(decoded===value)break;value=decoded;}catch(_){break;}
+  }
+  return value;
+}
+function graphFocusCanonicalURL(raw) {
+  const value=decodeGraphFocusValue(raw);
+  try{
+    const parsed=new URL(value,cache.scan?.target||location.origin);
+    parsed.search='';
+    const fragmentPath=String(parsed.hash||'').replace(/^#/,'').split('?')[0];
+    parsed.hash=fragmentPath?'#'+fragmentPath:'';
+    return parsed.toString().replace(/\/$/,'');
+  }catch(_){return value.toLowerCase().replace(/\/$/,'');}
+}
+function graphFocusDisplayQuery(raw) {
+  const value=decodeGraphFocusValue(raw);
+  try{
+    const parsed=new URL(value,cache.scan?.target||location.origin);
+    const fragment=String(parsed.hash||'').replace(/^#/,'').split('?')[0];
+    return (parsed.pathname||'/')+(fragment?'#'+fragment:'');
+  }catch(_){return value;}
+}
+function focusTargetTree(raw) {
+  const decoded=decodeGraphFocusValue(raw);
+  const display=graphFocusDisplayQuery(decoded);
+  const canonical=graphFocusCanonicalURL(decoded);
+  const endpoints=(targetTreeState.model?.nodes||[]).filter(node=>node.kind==='endpoint');
+  const exact=endpoints.find(node=>graphFocusCanonicalURL(node.url)===canonical);
+  targetTreeState.query=String(exact?graphFocusDisplayQuery(exact.url):display).trim().toLowerCase();
+  const input=document.getElementById('targetTreeSearch');if(input)input.value=exact?graphFocusDisplayQuery(exact.url):display;
+  if(exact){
+    targetTreeState.selected=exact.id;
+    targetTreeState.expanded.add('tree:root');
+    if(exact.domain)targetTreeState.expanded.add('domain:'+exact.domain);
+    if(exact.hostID)targetTreeState.expanded.add(exact.hostID);
+    if(exact.districtID)targetTreeState.expanded.add(exact.districtID);
+  }else if(targetTreeState.selected&&!targetTreeSelectionVisible(targetTreeState.selected)){
+    targetTreeState.selected=null;
+  }
+  renderTargetTreeBody();renderTargetTreeInspector();refreshGraphCopilotContext();
+  if(exact)requestAnimationFrame(()=>{
+    const row=[...document.querySelectorAll('[data-tt-action="select"]')].find(item=>item.dataset.ttId===exact.id);
+    row?.scrollIntoView({behavior:'smooth',block:'center'});
+  });
+  return {query:display, matched:!!exact};
+}
 
 async function renderTargetTree(el){
   if(atlasState?.resizeObserver){atlasState.resizeObserver.disconnect();atlasState.resizeObserver=null;}
@@ -14619,6 +15760,7 @@ function toggleTreeGroup() {}
 
 // ─── AI LOG ───
 let ailogData = null;
+let ailogRefreshNeeded = false;
 // Filter state for the AI Log view. Defaults to 'llm' because the table
 // otherwise opens on a wall of crawler page_visited / form_discovered rows
 // that have no tokens, no duration, and aren't what an operator looking at
@@ -14628,11 +15770,20 @@ let ailogFilter = 'llm';     // 'all' | 'llm' | 'crawler' | 'agent:NAME'
 let ailogSearch = '';
 
 function setAILogFilter(f) { ailogFilter = f; renderView(); }
+function aiLogIsModelCall(e) {
+  return (Number(e?.tokens_in) > 0) || (Number(e?.tokens_out) > 0) ||
+    (String(e?.action || '').includes('failed') && !!String(e?.model_id || ''));
+}
 
 async function renderAILog(el) {
-  if (!ailogData) {
-    el.innerHTML = '<div class="loading">Loading AI log...</div>';
-    ailogData = await api('/api/ailog');
+  if (!ailogData || ailogRefreshNeeded) {
+    const alreadyMounted = !!el.querySelector('.toolbar, .table-wrap, .empty-state');
+    if (!alreadyMounted) {
+      el.innerHTML = '<div class="loading">Loading AI log...</div>';
+    }
+    const freshAILog = await api('/api/ailog');
+    if (freshAILog !== null && freshAILog !== undefined) ailogData = freshAILog;
+    ailogRefreshNeeded = false;
     setText('nav-ailog-count', ailogData?.length || 0);
   }
   const entries = ailogData || [];
@@ -14643,19 +15794,24 @@ async function renderAILog(el) {
 
   // Aggregates always derived from the FULL data set so the metric cards
   // don't mislead when the filter is active.
-  let totalIn = 0, totalOut = 0, totalMs = 0, llmCalls = 0;
-  entries.forEach(e => { if (e.tokens_in > 0) { totalIn += e.tokens_in; totalOut += e.tokens_out; totalMs += e.duration_ms; llmCalls++; }});
+  let totalIn = 0, totalOut = 0, totalMs = 0, llmCalls = 0, failedCalls = 0;
+  entries.forEach(e => {
+    if (aiLogIsModelCall(e)) {
+      totalIn += e.tokens_in; totalOut += e.tokens_out; totalMs += e.duration_ms; llmCalls++;
+      if (String(e.action||'').includes('failed')) failedCalls++;
+    }
+  });
   const crawlerCount = entries.filter(e => e.agent === 'crawler').length;
 
   // Per-agent counts, LLM rows only (no point listing crawler agents here
   // since the Crawler pill already covers them). Top 5 by call count.
   const agentCounts = {};
-  entries.forEach(e => { if (e.tokens_in > 0) agentCounts[e.agent] = (agentCounts[e.agent] || 0) + 1; });
+  entries.forEach(e => { if (aiLogIsModelCall(e)) agentCounts[e.agent] = (agentCounts[e.agent] || 0) + 1; });
   const topAgents = Object.entries(agentCounts).sort((a,b) => b[1] - a[1]).slice(0, 5);
 
   // Apply filter + search to the rendered rows.
   let filtered = entries;
-  if (ailogFilter === 'llm')           filtered = filtered.filter(e => e.tokens_in > 0);
+  if (ailogFilter === 'llm')           filtered = filtered.filter(aiLogIsModelCall);
   else if (ailogFilter === 'crawler')  filtered = filtered.filter(e => e.agent === 'crawler');
   else if (ailogFilter.startsWith('agent:')) {
     const a = ailogFilter.slice('agent:'.length);
@@ -14671,6 +15827,7 @@ async function renderAILog(el) {
 
   let html = `<div class="cards" style="margin-bottom:16px">
     <div class="card"><div class="label">LLM Calls</div><div class="value" style="color:var(--purple)">${llmCalls}</div></div>
+    <div class="card"><div class="label">Failed Calls</div><div class="value" style="color:${failedCalls?'var(--red)':'var(--green)'}">${failedCalls}</div><div class="sub">provider/model failures</div></div>
     <div class="card"><div class="label">Input Tokens</div><div class="value">${fmtNum(totalIn)}</div></div>
     <div class="card"><div class="label">Output Tokens</div><div class="value">${fmtNum(totalOut)}</div></div>
     <div class="card"><div class="label">Total Time</div><div class="value">${fmtDuration(totalMs)}</div></div>
@@ -14694,15 +15851,17 @@ async function renderAILog(el) {
   html += `<div class="table-wrap"><table>
     <tr><th>Time</th><th>Agent</th><th>Action</th><th>Tokens In</th><th>Tokens Out</th><th>Duration</th><th>Details</th></tr>`;
   filtered.forEach(e => {
-    const hasMetrics = e.tokens_in > 0;
-    const rowStyle = hasMetrics ? 'cursor:pointer' : 'opacity:0.65;';
-    const rowClick = hasMetrics ? `onclick="showAILogConversation(${e.id})"` : '';
-    html += `<tr style="${rowStyle}" ${rowClick} title="${hasMetrics ? 'Click to view the full conversation' : ''}">
+    const hasMetrics = aiLogIsModelCall(e);
+    const hasRecordedUsage = (Number(e.tokens_in) > 0) || (Number(e.tokens_out) > 0);
+    const canInspect = hasMetrics && Number(e.id) > 0;
+    const rowStyle = canInspect ? 'cursor:pointer' : (hasMetrics ? '' : 'opacity:0.65;');
+    const rowClick = canInspect ? `onclick="showAILogConversation(${e.id})"` : '';
+    html += `<tr style="${rowStyle}" ${rowClick} title="${canInspect ? 'Click to view the full conversation' : (hasMetrics ? 'Historical failed call; raw response was not retained' : '')}">
       <td style="font-size:11px;color:var(--text2);white-space:nowrap">${fmtTime(e.created_at)}</td>
       <td>${esc(e.agent||'')}</td>
       <td>${esc(e.action||'')}</td>
-      <td style="font-size:12px;color:${hasMetrics?'var(--accent)':'var(--text2)'}">${hasMetrics ? fmtNum(e.tokens_in) : '-'}</td>
-      <td style="font-size:12px;color:${hasMetrics?'var(--green)':'var(--text2)'}">${hasMetrics ? fmtNum(e.tokens_out) : '-'}</td>
+      <td style="font-size:12px;color:${hasRecordedUsage?'var(--accent)':'var(--text2)'}">${hasRecordedUsage ? fmtNum(e.tokens_in) : (hasMetrics ? 'unknown' : '-')}</td>
+      <td style="font-size:12px;color:${hasRecordedUsage?'var(--green)':'var(--text2)'}">${hasRecordedUsage ? fmtNum(e.tokens_out) : (hasMetrics ? 'unknown' : '-')}</td>
       <td style="font-size:12px;color:var(--text2)">${hasMetrics ? fmtDuration(e.duration_ms) : '-'}</td>
       <td class="ellipsis" style="max-width:300px;font-size:12px">${esc(truncStr(e.detail||e.result||'', 100))}</td>
     </tr>`;
@@ -14781,10 +15940,13 @@ let copilotLoadedScanID = null;
 
 const ASK_EXAMPLES = [
   'Brief me: what is observed, inferred, and still unknown about this target?',
+  'Where are the user-controlled inputs? Group exact observed parameters by query, path, body, header, and file upload; cite the evidence.',
+  'Does this target have login, search, checkout, account recovery, admin, upload, or API features? Separate observed, inferred, and not seen.',
+  'For the priority testing leads, which are only observed, queued, running, tested, or confirmed?',
   'Why is understanding not at 100%, and what closes the highest-impact gap?',
   'Find the highest-value observed but unvisited route. If this scan is running, propose one bounded Recon-only visit.',
-  'Which origin, workflow, or trust boundary deserves attention first, and why?',
 ];
+const ASK_EXAMPLE_LABELS = ['Target brief', 'Input map', 'Feature inventory', 'Test status', 'Coverage gap', 'Next action'];
 
 // Minimal, injection-safe markdown: escape first, then re-introduce a small
 // whitelist for structured, scan-friendly answers. Never renders raw HTML.
@@ -14899,8 +16061,9 @@ function askStepsHTML(m) {
 
 function askThreadHTML(source = 'drawer') {
   if (!askThread.length) {
-    return `<div class="copilot-empty"><h3>Talk through the target</h3><p>I can explain what AOBTD learned, focus the Graph, compare coverage, or propose a bounded follow-up for an active scan.</p>
-      <div class="copilot-prompts">${ASK_EXAMPLES.map((q, i) => `<button class="copilot-prompt" onclick="askExample(${i},'${source}')">${esc(q)}</button>`).join('')}</div></div>`;
+    return `<div class="copilot-empty"><h3>Ask like a pentester</h3><p>Use detailed, target-specific questions. Copilot reads this scan's captured evidence and says when the answer is missing; it does not fill gaps from general knowledge about a well-known site.</p>
+      <div class="copilot-capability-map"><div class="copilot-capability-title">Good question surface</div><div class="copilot-capability-copy">Ask where input enters, which features and roles were observed, what trust boundaries exist, why a lead matters, or whether a proposed test actually ran.</div><div class="copilot-capability-chips"><span>inputs &amp; parameters</span><span>features &amp; workflows</span><span>roles &amp; ownership</span><span>evidence gaps</span><span>test lifecycle</span><span>next bounded action</span></div></div>
+      <div class="copilot-prompts">${ASK_EXAMPLES.map((q, i) => `<button class="copilot-prompt" onclick="askExample(${i},'${source}')"><span class="copilot-prompt-kicker">${esc(ASK_EXAMPLE_LABELS[i] || 'Suggested')}</span>${esc(q)}</button>`).join('')}</div></div>`;
   }
   return askThread.map((m, i) => {
     if (m.role === 'user') return `<div class="copilot-msg user"><div class="copilot-bubble">${esc(m.text)}</div></div>`;
@@ -14912,20 +16075,58 @@ function askThreadHTML(source = 'drawer') {
   }).join('');
 }
 
+function captureConversationScroll(thread) {
+  if (!thread) return {top:0, followLatest:true};
+  const remaining = thread.scrollHeight - thread.clientHeight - thread.scrollTop;
+  return {top:thread.scrollTop, followLatest:remaining < 48};
+}
+
+function restoreConversationScroll(thread, state) {
+  if (!thread) return;
+  if (!state || state.followLatest) thread.scrollTop = thread.scrollHeight;
+  else thread.scrollTop = state.top;
+}
+
 function renderAsk(el) {
   if (!scanID) {
     el.innerHTML = '<div class="empty-state"><p>Pick a scan first, then talk with Target Copilot.</p></div>';
     return;
   }
-  el.innerHTML = `<div style="display:flex;flex-direction:column;height:calc(100vh - 96px);max-width:900px;margin:0 auto">
-    <div style="padding:2px 4px 12px"><h2 style="font:700 18px var(--font-mono)">Target Copilot</h2><p style="color:var(--text2);font-size:11px">Grounded in this scan's evidence, Knowledge, and current workspace context.</p></div>
-    <div id="askThread" style="flex:1;overflow-y:auto;padding:8px 4px">${askThreadHTML('page')}</div>
-    <div style="display:flex;gap:8px;padding:12px 4px;border-top:1px solid var(--border)">
-      <textarea id="askInput" rows="1" placeholder="Ask about this target…" style="flex:1;resize:none;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit" ${askBusy ? 'disabled' : ''} onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAsk('page');}"></textarea>
-      <button class="action-btn" style="padding:0 18px" ${askBusy ? 'disabled' : ''} onclick="sendAsk('page')">${askBusy ? '…' : 'Send'}</button>
-    </div></div>`;
+  const scan = cache?.scan || {};
+  const model = String(scan.copilot_model || '').trim();
+  const provider = String(scan.copilot_provider || '').trim();
+  const modelLabel = model ? `${model}${provider ? ` · ${provider === 'openai-compatible' ? 'compatible API' : provider}` : ''}` : 'Scan default model';
+  const threadScroll = captureConversationScroll(el.querySelector('#askThread'));
+  el.innerHTML = `<section class="ask-page" aria-labelledby="askPageTitle">
+    <header class="ask-page-head">
+      <div class="ask-page-heading">
+        <div class="ask-page-eyebrow">Evidence workspace</div>
+        <h2 class="ask-page-title" id="askPageTitle">Target Copilot</h2>
+        <p class="ask-page-subtitle">Ask questions across this scan's evidence, Knowledge, and current workspace. Copilot can explain what is known, reveal gaps, focus the Graph, and propose a bounded next step.</p>
+      </div>
+      <div class="ask-page-actions">
+        <button class="ask-page-clear" type="button" onclick="clearCopilotThread()" ${askBusy || !askThread.length ? 'disabled' : ''}>Clear conversation</button>
+      </div>
+    </header>
+    <div class="ask-page-surface">
+      <div class="ask-page-meta" aria-label="Copilot operating context">
+        <span class="ask-page-meta-label">Operating context</span>
+        <span class="ask-page-chip grounded">Evidence-grounded</span>
+        <span class="ask-page-chip model" title="Model inherited from this scan">${esc(modelLabel)}</span>
+        <span class="ask-page-chip approval">Approval before requests or scan steering</span>
+      </div>
+      <div class="ask-page-thread" id="askThread" aria-live="polite">${askThreadHTML('page')}</div>
+      <div class="ask-page-composer">
+        <div class="ask-page-compose-row">
+          <textarea class="ask-page-input" id="askInput" rows="1" aria-label="Ask Target Copilot" placeholder="Ask what is proven, what is missing, or what to investigate next…" ${askBusy ? 'disabled' : ''} oninput="autoSizeCopilotInput(this)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAsk('page');}"></textarea>
+          <button class="ask-page-send" type="button" ${askBusy ? 'disabled' : ''} onclick="sendAsk('page')">${askBusy ? 'Thinking…' : 'Send  ↑'}</button>
+        </div>
+        <div class="ask-page-composer-note"><span>Enter to send · Shift + Enter for a new line</span><span class="safe">Navigation is local; active effects require approval.</span></div>
+      </div>
+    </div>
+  </section>`;
   const thread = document.getElementById('askThread');
-  if (thread) thread.scrollTop = thread.scrollHeight;
+  restoreConversationScroll(thread, threadScroll);
 }
 
 function toggleCopilot(force) {
@@ -15072,11 +16273,12 @@ function refreshCopilotContext() {
 function renderCopilotDrawer() {
   refreshCopilotContext();
   const thread = document.getElementById('copilotThread');
+  const threadScroll = captureConversationScroll(thread);
   const input = document.getElementById('copilotInput');
   const send = document.getElementById('copilotSend');
   if (thread) {
     thread.innerHTML = askThreadHTML('drawer');
-    thread.scrollTop = thread.scrollHeight;
+    restoreConversationScroll(thread, threadScroll);
   }
   if (input) input.disabled = askBusy;
   if (send) send.disabled = askBusy;
@@ -15199,12 +16401,10 @@ async function applyCopilotUIActions(actions) {
     }
     if (action.type === 'focus_graph') {
       if (currentView !== 'graph') await navigateToView('graph');
-      const query = String(action.query || '').trim();
+      const query = decodeGraphFocusValue(action.query);
       if (!query) continue;
       if (graphMode === 'tree') {
-        targetTreeState.query = query.toLowerCase();
-        const input = document.getElementById('targetTreeSearch'); if (input) input.value = query;
-        renderTargetTreeBody(); renderTargetTreeInspector();
+        focusTargetTree(query);
       } else if (graphMode === 'model') {
         atlasState.query = query.toLowerCase();
         const input = document.getElementById('atlasSearch'); if (input) input.value = query;
@@ -15373,7 +16573,8 @@ function scanTargetInterpretation() {
   try {
     const parsed = new URL(parseable);
     if (parsed.hostname.includes('*')) return {error:'Wildcard must be the complete left-most label, for example *.example.com.'};
-    const includeSubdomains = document.getElementById('scanIncludeSubdomains')?.checked !== false;
+    const ipLiteral = scanHostIsIPLiteral(parsed.hostname);
+    const includeSubdomains = document.getElementById('scanIncludeSubdomains')?.checked !== false && !ipLiteral;
     const root = scanDisplayRootDomain(parsed.hostname);
     const wildcardOrigin = parsed.protocol + '//*.' + root + (parsed.port ? ':' + parsed.port : '');
     const domainScope = wildcard
@@ -15386,10 +16587,16 @@ function scanTargetInterpretation() {
       scope: domainScope,
       wildcard: !!wildcard,
       includeSubdomains: includeSubdomains || !!wildcard,
+      ipLiteral,
     };
   } catch (_) {
     return {error:'Enter a valid URL, domain, or wildcard.'};
   }
+}
+
+function scanHostIsIPLiteral(hostname) {
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return host.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
 }
 
 // Public-suffix-aware validation still happens on the server. This compact
@@ -15408,16 +16615,22 @@ function scanDisplayRootDomain(hostname) {
 function updateScanBoundaryPreview() {
   const preview = document.getElementById('scanBoundaryPreview');
   if (!preview) return;
+  const includeSubdomains = document.getElementById('scanIncludeSubdomains');
   const info = scanTargetInterpretation();
   if (info.empty) {
+    if (includeSubdomains) includeSubdomains.disabled = false;
     preview.innerHTML = `<strong>Start with one URL.</strong><span class="nm-scope-note">AOBTD will open it first, then follow only related hosts the application actually uses.</span>`;
     return;
   }
   if (info.error) {
+    if (includeSubdomains) includeSubdomains.disabled = false;
     preview.innerHTML = `<span style="color:var(--red)">${esc(info.error)}</span>`;
     return;
   }
-  const note = info.includeSubdomains
+  if (includeSubdomains) includeSubdomains.disabled = !!info.ipLiteral;
+  const note = info.ipLiteral
+    ? 'IP addresses do not have a subdomain boundary, so Smart discovery keeps this scan on the exact origin. Add any other authorized origins in Advanced settings.'
+    : info.includeSubdomains
     ? 'Google, Gmail, analytics, ads, and other external domains stay out. AI prioritizes endpoints inside this boundary; it never expands authorization by itself.'
     : 'The scan stays on this exact origin. Requests to sibling service hosts are recorded as out of scope.';
   const boundary = info.includeSubdomains
@@ -15644,12 +16857,14 @@ async function startNewScan() {
   const hint = document.getElementById('scanHint');
   const target = document.getElementById('scanTarget').value.trim();
 	const targetInfo = scanTargetInterpretation();
-	const includeSubdomains = document.getElementById('scanIncludeSubdomains')?.checked !== false || !!targetInfo.wildcard;
+	const includeSubdomains = !!targetInfo.includeSubdomains;
 	const scope = (document.getElementById('scanAdditionalScope')?.value || '')
 	  .split(',')
 	  .map(value => value.trim())
 	  .filter(Boolean);
-  // 0 = "no limit" — we intentionally let 0 flow through (server + crawler treat it as uncapped).
+	// 0 selects the UI's adaptive breadth mode. The server adds a novelty
+	// convergence policy and time ceiling; explicit truly-unlimited crawling is
+	// available only from the CLI.
   let maxPages = parseInt(document.getElementById('scanMaxPages').value, 10);
   if (isNaN(maxPages) || maxPages < 0) maxPages = 20;
   const llm = document.getElementById('scanLLM').value;
@@ -15686,6 +16901,15 @@ async function startNewScan() {
 	  const bolaSecondaryOwner = scanAuthMethod === 'form' ? (document.getElementById('scanBOLASecondaryOwner')?.value || '').trim() : '';
 	  const bolaSecondaryObjectURL = scanAuthMethod === 'form' ? (document.getElementById('scanBOLASecondaryObjectURL')?.value || '').trim() : '';
 	  const testingAuthority = document.getElementById('scanTestingAuthority')?.value || 'active';
+	  const externalRecon = document.getElementById('scanExternalRecon')?.checked !== false;
+	  const reconSources = [
+	    ['scanReconWayback','wayback'], ['scanReconCommonCrawl','commoncrawl'],
+	    ['scanReconCT','crtsh'], ['scanReconGoogle','google']
+	  ].filter(([id]) => document.getElementById(id)?.checked).map(([,source]) => source);
+	  const reconDNS = !!document.getElementById('scanReconDNS')?.checked;
+	  const reconHTTP = !!document.getElementById('scanReconHTTP')?.checked;
+	  const reconVHost = !!document.getElementById('scanReconVHost')?.checked;
+	  const continuousReconMinutes = document.getElementById('scanContinuousRecon')?.checked ? Number(document.getElementById('scanContinuousReconInterval')?.value || 360) : 0;
 
   if (!target) {
     hint.textContent = 'Target URL is required.';
@@ -15726,6 +16950,13 @@ async function startNewScan() {
 	        bola_secondary_owner: bolaSecondaryOwner,
 	        bola_secondary_object_url: bolaSecondaryObjectURL,
 	        testing_authority: testingAuthority,
+	        external_recon: externalRecon,
+	        recon_sources: reconSources,
+	        recon_limit: 500,
+	        recon_dns: reconDNS,
+	        recon_http: reconHTTP,
+	        recon_vhost: reconVHost,
+	        continuous_recon_minutes: continuousReconMinutes,
 	      }),
     });
     const data = await res.json();
@@ -16576,14 +17807,19 @@ function findingPOCRequest(f) {
 
 function renderFindingVerificationNotes(f) {
   const type = String(f.vuln_type || '').toLowerCase();
-  if (!/(sqli|weak_credentials|auth)/.test(type)) return '';
+  const isSQLi = /(sqli|sql_injection)/.test(type);
+  const isAuthProof = /(weak_credentials|auth|login_bypass|session)/.test(type);
+  if (!isSQLi && !isAuthProof) return '';
   const evidence = String(f.evidence || '');
   const response = String(f.poc_response || '');
   const notes = [];
-  if (!/Auth success signal:/i.test(evidence)) {
+  if (isAuthProof && !/Auth success signal:/i.test(evidence)) {
     notes.push('Retest should confirm a concrete auth artifact: JSON token, bearer token, auth session cookie, or an authenticated follow-up request. HTTP 200 alone is not enough.');
   }
-  if (/<!doctype html|<html[\s>]/i.test(response)) {
+  if (isSQLi) {
+    notes.push('Retest should compare the injected response with a benign baseline and confirm a SQL error, boolean delta, or newly introduced database/schema content. Status 200 alone is not enough.');
+  }
+  if (!isSQLi && /<!doctype html|<html[\s>]/i.test(response)) {
     notes.push('The stored response preview is HTML. Verify this is not just the public login page or SPA shell.');
   }
   const sameLength = evidence.match(/Response length:\s*(\d+)\s*bytes\s*\(baseline:\s*\1\)/i);
@@ -17684,7 +18920,15 @@ function cmdkSelect(idx) {
 })();
 
 // Reset cached view data on scan change
-function resetViewCaches() { trafficData = null; ailogData = null; resetGraphDataCache(); }
+function resetViewCaches() {
+  trafficData = null;
+  trafficRefreshNeeded = false;
+  ailogData = null;
+  ailogRefreshNeeded = false;
+  pageOverviewHTMLCache = '';
+  pageOverviewCacheScanID = null;
+  resetGraphDataCache();
+}
 
 // Go
 init();

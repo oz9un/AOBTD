@@ -19,6 +19,7 @@ import (
 	"github.com/ozzyw/aobtd/internal/agent"
 	"github.com/ozzyw/aobtd/internal/browser"
 	"github.com/ozzyw/aobtd/internal/config"
+	"github.com/ozzyw/aobtd/internal/externalrecon"
 	"github.com/ozzyw/aobtd/internal/llm"
 	"github.com/ozzyw/aobtd/internal/policy"
 	"github.com/ozzyw/aobtd/internal/proxy"
@@ -42,9 +43,18 @@ func NewScanCmd() *cobra.Command {
 		crawl                  bool
 		maxDepth               int
 		maxPages               int
+		crawlTimeout           time.Duration
+		adaptiveCrawl          bool
 		includeSubdomains      bool
 		scopeEntries           []string
 		seedURLs               []string
+		externalRecon          bool
+		enumeraiteBin          string
+		reconSources           []string
+		reconLimit             int
+		reconDNS               bool
+		reconHTTP              bool
+		reconVHost             bool
 		llmProvider            string
 		llmModel               string
 		llmURL                 string
@@ -89,9 +99,18 @@ func NewScanCmd() *cobra.Command {
 				crawl:                  crawl,
 				maxDepth:               maxDepth,
 				maxPages:               maxPages,
+				crawlTimeout:           crawlTimeout,
+				adaptiveCrawl:          adaptiveCrawl,
 				includeSubdomains:      includeSubdomains,
 				scopeEntries:           scopeEntries,
 				seedURLs:               seedURLs,
+				externalRecon:          externalRecon,
+				enumeraiteBin:          enumeraiteBin,
+				reconSources:           reconSources,
+				reconLimit:             reconLimit,
+				reconDNS:               reconDNS,
+				reconHTTP:              reconHTTP,
+				reconVHost:             reconVHost,
 				llmProvider:            llmProvider,
 				llmModel:               llmModel,
 				llmURL:                 llmURL,
@@ -128,9 +147,18 @@ func NewScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&crawl, "crawl", true, "Enable automated crawling")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 10, "Maximum crawl depth")
 	cmd.Flags().IntVar(&maxPages, "max-pages", 100, "Maximum pages to crawl")
+	cmd.Flags().DurationVar(&crawlTimeout, "crawl-timeout", 30*time.Minute, "Maximum discovery time (0 = no time limit)")
+	cmd.Flags().BoolVar(&adaptiveCrawl, "adaptive-crawl", false, "Stop an uncapped crawl when route/template/form novelty converges")
 	cmd.Flags().BoolVar(&includeSubdomains, "include-subdomains", false, "Smart-discover observed services across the target's registrable domain; external domains stay out of scope")
 	cmd.Flags().StringSliceVar(&scopeEntries, "scope", nil, "Additional exact or wildcard origins (repeatable or comma-separated, e.g. https://api.example.com,https://*.example.com)")
 	cmd.Flags().StringSliceVar(&seedURLs, "seed-url", nil, "Additional in-scope URL to visit and capture before crawling (repeatable or comma-separated; useful for OpenAPI/Swagger/Postman specs)")
+	cmd.Flags().BoolVar(&externalRecon, "external-recon", true, "Collect passive attack-surface evidence with Enumeraite before crawling")
+	cmd.Flags().StringVar(&enumeraiteBin, "enumeraite-bin", "", "Path to Enumeraite executable (or set AOBTD_ENUMERAITE_BIN)")
+	cmd.Flags().StringSliceVar(&reconSources, "recon-source", []string{"wayback", "commoncrawl", "crtsh"}, "Enumeraite source to query (repeatable): wayback, commoncrawl, crtsh, google")
+	cmd.Flags().IntVar(&reconLimit, "recon-limit", 500, "Maximum records accepted from each external recon source")
+	cmd.Flags().BoolVar(&reconDNS, "recon-dns", false, "Resolve bounded in-scope subdomain candidates")
+	cmd.Flags().BoolVar(&reconHTTP, "recon-http", false, "Confirm recon candidates with bounded HTTP GET requests")
+	cmd.Flags().BoolVar(&reconVHost, "recon-vhost", false, "Explicitly enable bounded Host-header virtual-host enumeration")
 
 	// LLM flags
 	cmd.Flags().StringVar(&llmProvider, "llm", "", "LLM provider: ollama, openai, anthropic (empty = no LLM analysis)")
@@ -216,7 +244,7 @@ func resolveScanScope(target string, includeSubdomains bool, extra []string) ([]
 		return append(values, value)
 	}
 
-	if includeSubdomains {
+	if includeSubdomains && !targetresolver.IsIPLiteral(target) {
 		root, rootErr := targetresolver.RegistrableDomain(target)
 		if rootErr != nil {
 			return nil, nil, rootErr
@@ -276,9 +304,18 @@ type scanOpts struct {
 	crawl                 bool
 	maxDepth              int
 	maxPages              int
+	crawlTimeout          time.Duration
+	adaptiveCrawl         bool
 	includeSubdomains     bool
 	scopeEntries          []string
 	seedURLs              []string
+	externalRecon         bool
+	enumeraiteBin         string
+	reconSources          []string
+	reconLimit            int
+	reconDNS              bool
+	reconHTTP             bool
+	reconVHost            bool
 	llmProvider           string
 	llmModel              string
 	llmURL                string
@@ -450,6 +487,97 @@ func canonicalPreflightMessage(err error) string {
 	return "Target preflight could not confirm canonical reachability. Browser evidence collection continued on the operator-declared URL."
 }
 
+// externalReconTargetEligible reports whether public passive recon sources can
+// meaningfully know about the target. Querying archives and Certificate
+// Transparency for loopback/private or reserved development names adds a
+// noticeable delay to local lab scans and can import unrelated noise.
+func externalReconTargetEligible(target string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".test") ||
+		strings.HasSuffix(host, ".invalid") || strings.HasSuffix(host, ".example") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
+			!ip.IsLinkLocalMulticast() && !ip.IsUnspecified()
+	}
+	return true
+}
+
+func runEnumeraiteRecon(ctx context.Context, db *store.DB, scanID int64, target string, executionPolicy *policy.Engine, opts scanOpts, logger *slog.Logger) []string {
+	options := map[string]any{
+		"include_subdomains": opts.includeSubdomains,
+		"limit":              opts.reconLimit,
+		"dns_enumeration":    opts.reconDNS,
+		"validate_http":      opts.reconHTTP,
+		"vhost_enumeration":  opts.reconVHost,
+	}
+	runID, err := db.StartReconRun(scanID, "enumeraite", opts.reconSources, options)
+	if err != nil {
+		logger.Warn("external recon persistence unavailable", "error", err)
+		return nil
+	}
+	result, stderrText, runErr := externalrecon.Run(ctx, target, externalrecon.Config{
+		Binary: opts.enumeraiteBin, Sources: opts.reconSources,
+		IncludeSubdomains: opts.includeSubdomains, Limit: opts.reconLimit,
+		DNSEnumeration: opts.reconDNS, ValidateHTTP: opts.reconHTTP,
+		VHostEnumeration: opts.reconVHost, Timeout: 90 * time.Second,
+	})
+	if runErr != nil {
+		_ = db.FinishReconRun(runID, "failed", []map[string]any{{"source": "enumeraite", "message": runErr.Error()}})
+		_, _ = db.InsertNarration(scanID, "recon", "external_unavailable",
+			"External recon was unavailable; the browser scan continued without discarding local evidence.", target,
+			map[string]any{"error": runErr.Error(), "stderr": strings.TrimSpace(stderrText)})
+		logger.Warn("external recon unavailable; continuing", "error", runErr)
+		return nil
+	}
+
+	confirmedSeeds := make([]string, 0, 16)
+	for _, item := range result.Observations {
+		inScope := item.InScope
+		if item.AssetType == "url" {
+			decision := executionPolicy.Authorize(policy.Action{TargetURL: item.Value, Method: "GET"})
+			inScope = inScope && decision.Allowed
+		}
+		persisted := store.ReconObservation{
+			Target: item.Target, AssetType: item.AssetType, Value: item.Value,
+			Source: item.Source, State: item.State, Confidence: item.Confidence,
+			ObservedAt: item.ObservedAt, InScope: inScope, Evidence: item.Evidence,
+		}
+		if err := db.UpsertReconObservation(scanID, runID, persisted); err != nil {
+			logger.Warn("persist external recon observation", "error", err, "value", item.Value)
+			continue
+		}
+		if item.AssetType == "url" && item.State == "confirmed" && item.Source == "http" && inScope && len(confirmedSeeds) < 25 {
+			confirmedSeeds = append(confirmedSeeds, item.Value)
+			_ = db.InsertDiscovery(scanID, store.Discovery{
+				TargetURL: item.Value, SourceURL: "enumeraite:" + item.Source,
+				Kind: store.DiscoveryExternalRecon, Detail: "policy-authorized confirmed external recon seed",
+			})
+		}
+	}
+	status := "complete"
+	if len(result.Errors) > 0 {
+		status = "partial"
+	}
+	_ = db.FinishReconRun(runID, status, result.Errors)
+	_, _ = db.InsertNarration(scanID, "recon", "external_complete",
+		fmt.Sprintf("Enumeraite collected %d provenance-preserving observations from %d source(s).", len(result.Observations), len(result.Sources)),
+		target, map[string]any{
+			"run_id": runID, "status": status, "sources": result.Sources,
+			"observations": len(result.Observations), "confirmed_seeds": len(confirmedSeeds),
+			"dns_enumeration": opts.reconDNS, "http_validation": opts.reconHTTP,
+			"vhost_enumeration": opts.reconVHost,
+		})
+	logger.Info("external recon complete", "observations", len(result.Observations), "status", status, "confirmed_seeds", len(confirmedSeeds))
+	return confirmedSeeds
+}
+
 func runScan(opts scanOpts) (retErr error) {
 	loadDotEnvLocal(".env.local")
 
@@ -471,6 +599,12 @@ func runScan(opts scanOpts) (retErr error) {
 		return fmt.Errorf("invalid --target: %w", err)
 	}
 	opts.target = declaration.Target
+	if targetresolver.IsIPLiteral(opts.target) {
+		// Smart discovery expands DNS names across a registrable domain. An IP
+		// literal has no such boundary, so keep it on the exact origin even when
+		// the default UI checkbox or CLI flag requested subdomain discovery.
+		opts.includeSubdomains = false
+	}
 	if declaration.WasWildcard {
 		seen := false
 		for _, existing := range opts.scopeEntries {
@@ -482,6 +616,9 @@ func runScan(opts scanOpts) (retErr error) {
 		if !seen {
 			opts.scopeEntries = append(opts.scopeEntries, declaration.ScopeRule)
 		}
+	}
+	if opts.reconVHost && (!opts.externalRecon || !opts.includeSubdomains) {
+		return fmt.Errorf("--recon-vhost requires --external-recon and --include-subdomains")
 	}
 
 	// Establish the real browser origin before constructing the exact-origin
@@ -552,9 +689,18 @@ func runScan(opts scanOpts) (retErr error) {
 	cfg.LLM.Budget.MaxCostCents = opts.budgetCents
 	cfg.Scan.MaxDepth = opts.maxDepth
 	cfg.Scan.MaxPages = opts.maxPages
+	cfg.Scan.CrawlTimeout = opts.crawlTimeout
+	cfg.Scan.AdaptiveCrawl = opts.adaptiveCrawl
 	cfg.Scan.Scope = policyScope
 	cfg.Scan.SeedURLs = normalizeSeedURLs(opts.target, opts.seedURLs)
 	cfg.Scan.TestingAuthority = testingAuthority
+	externalReconEnabled := opts.externalRecon && externalReconTargetEligible(opts.target)
+	cfg.Scan.Recon = config.ReconConfig{
+		Enabled: externalReconEnabled, Sources: append([]string(nil), opts.reconSources...),
+		IncludeSubdomains: opts.includeSubdomains, Limit: opts.reconLimit,
+		DNSEnumeration: opts.reconDNS, ValidateHTTP: opts.reconHTTP,
+		VHostEnumeration: opts.reconVHost,
+	}
 	if len(bolaPersonas) >= 2 {
 		cfg.Scan.PrimaryPersona = config.PersonaConfig{
 			LoginURL:    bolaPersonas[0].LoginURL,
@@ -575,6 +721,21 @@ func runScan(opts scanOpts) (retErr error) {
 	scanID, err := db.CreateScan(opts.target, string(cfgJSON))
 	if err != nil {
 		return fmt.Errorf("create scan: %w", err)
+	}
+	if opts.externalRecon && !externalReconEnabled {
+		db.InsertNarration(scanID, "recon", "external_skipped",
+			"Public passive recon was skipped because this is a local, private, or reserved development target.",
+			opts.target, map[string]any{"reason": "non_public_target"})
+		logger.Info("external recon skipped for non-public target", "target", opts.target)
+	}
+	if externalReconEnabled {
+		confirmedSeeds := runEnumeraiteRecon(context.Background(), db, scanID, opts.target, executionPolicy, opts, logger)
+		if len(confirmedSeeds) > 0 {
+			cfg.Scan.SeedURLs = normalizeSeedURLs(opts.target, append(cfg.Scan.SeedURLs, confirmedSeeds...))
+			if refreshed, marshalErr := json.Marshal(cfg); marshalErr == nil {
+				_, _ = db.Conn().Exec(`UPDATE scans SET config_json=? WHERE id=?`, string(refreshed), scanID)
+			}
+		}
 	}
 	db.InsertNarration(scanID, "orchestrator", "authority",
 		fmt.Sprintf("Testing authority selected: %s (%s).", testingAuthorityLabel(testingAuthority), testingAuthority),
@@ -869,6 +1030,8 @@ func runScan(opts scanOpts) (retErr error) {
 			ScanID:                scanID,
 			MaxDepth:              opts.maxDepth,
 			MaxPages:              opts.maxPages,
+			CrawlTimeout:          opts.crawlTimeout,
+			AdaptiveCrawl:         opts.adaptiveCrawl,
 			Scope:                 crawlScope,
 			PolicyScope:           policyScope,
 			SeedURLs:              cfg.Scan.SeedURLs,

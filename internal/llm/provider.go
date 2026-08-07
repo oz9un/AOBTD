@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -107,12 +108,60 @@ type Usage struct {
 	OutputTokens int
 }
 
+// CompletionError represents a provider response that consumed tokens but did
+// not produce a usable assistant answer. Keeping billed usage on the error is
+// important for reasoning models: they can exhaust their completion allowance
+// entirely on internal reasoning and return no final content.
+type CompletionError struct {
+	Message    string
+	Usage      Usage
+	Model      string
+	StopReason string
+}
+
+func (e *CompletionError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+// UsageFromError recovers billed usage from an unsuccessful provider call.
+// Callers use this to reconcile scan budgets and observability instead of
+// treating every provider error as a free request.
+func UsageFromError(err error) (Usage, string, bool) {
+	var completionErr *CompletionError
+	if !errors.As(err, &completionErr) || completionErr == nil {
+		return Usage{}, "", false
+	}
+	usage := completionErr.Usage
+	return usage, completionErr.Model, usage.InputTokens > 0 || usage.OutputTokens > 0
+}
+
 // ModelInfo describes a model's capabilities.
 type ModelInfo struct {
 	Name             string
 	MaxContextTokens int
 	MaxOutputTokens  int
 	SupportsJSON     bool
+}
+
+// StructuredOutputTokenLimit gives reasoning-first MiniMax models enough
+// completion room to finish their JSON after internal reasoning. Other models
+// retain the caller's established limit. The advertised provider cap remains
+// the final ceiling.
+func StructuredOutputTokenLimit(provider Provider, standard, miniMaxReasoning int) int {
+	limit := standard
+	if provider != nil {
+		name := strings.ToLower(strings.TrimSpace(provider.ModelInfo().Name))
+		if strings.Contains(name, "minimax-m2") || strings.Contains(name, "minimax-m3") {
+			limit = miniMaxReasoning
+		}
+		if providerLimit := provider.ModelInfo().MaxOutputTokens; providerLimit > 0 && limit > providerLimit {
+			limit = providerLimit
+		}
+	}
+	return limit
 }
 
 // DefaultBaseURL returns the canonical API URL for the given provider name.

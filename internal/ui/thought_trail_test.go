@@ -13,6 +13,28 @@ import (
 	"github.com/ozzyw/aobtd/pkg/types"
 )
 
+func TestStrategyViewExplainsPlanExecutionAndEvidenceBoundary(t *testing.T) {
+	raw, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	for _, contract := range []string{
+		"Testing strategy",
+		"1 · Test plan",
+		"2 · Execution status",
+		"3 · Decision audit",
+		"function renderStrategyDirectiveQueue",
+		"Hypotheses without directives are ideas, not executed tests.",
+		"Waiting for a scanner worker; no request result exists yet.",
+		"This trace explains the plan; it is not proof that the target is vulnerable.",
+	} {
+		if !strings.Contains(html, contract) {
+			t.Fatalf("Strategy clarity contract missing %q", contract)
+		}
+	}
+}
+
 func TestBuildThoughtTrailSummarizesWorkflowsAndGuardrails(t *testing.T) {
 	db, scanID := seedThoughtTrailDB(t)
 	defer db.Close()

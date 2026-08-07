@@ -25,6 +25,13 @@ func TestReconCommandCenterIsFirstClassWorkspace(t *testing.T) {
 		`Target DNA`,
 		`Evidence gates`,
 		`Origin &amp; subdomain map`,
+		`External recon`,
+		`Source provenance // candidates // confirmed assets`,
+		`function rcRenderExternalRecon`,
+		`api('/api/recon-assets')`,
+		`continuous · every`,
+		`newAssets`,
+		`promotedAssets`,
 		`Path to 100`,
 		`Discovery lens`,
 		`Novelty-first sampling`,
@@ -52,6 +59,19 @@ func TestReconCommandCenterIsFirstClassWorkspace(t *testing.T) {
 		`batch-scoped feedback, not proof that one route caused the movement`,
 		`one batch cannot`,
 		`calibration`,
+		`function rcRenderPentesterBrief`,
+		`Direct evidence · ${inputCount} total captured field`,
+		`Inference, not proof`,
+		`function rcLeadLifecycle`,
+		`function rcProfileInputLeadRows`,
+		`executed lifecycle first · user-facing controls next`,
+		`Observed signal`,
+		`Active test completed`,
+		`function rcDirectiveIsSecurityTest`,
+		`A matching fetch/reanalysis completed; no active probe ran`,
+		`Detected automatically; no matching active-test directive is queued`,
+		`A pentester queue, not a vulnerability list`,
+		`api('/api/strategy')`,
 	} {
 		if !strings.Contains(html, contract) {
 			t.Fatalf("embedded Recon Command Center missing %q", contract)
@@ -176,6 +196,10 @@ func TestReconCommandCenterUsesMeasuredGroundedEvidence(t *testing.T) {
 		`Noise suppressed`,
 		`without spending AI calls`,
 		`Recon analysis does not imply active probing.`,
+		`id="scanExternalRecon"`,
+		`id="scanReconVHost"`,
+		`Virtual-host enumeration (explicit opt-in)`,
+		`id="scanContinuousRecon"`,
 	} {
 		if !strings.Contains(html, contract) {
 			t.Fatalf("Recon evidence contract missing %q", contract)
@@ -235,7 +259,7 @@ func TestReconRefreshesRunningInternalsAndSemanticCorrections(t *testing.T) {
 		`activeKey !== key || requestSerial !== rcAgentInternalsRequestSerial`,
 		`activeScanKey !== reconScanKey || deferredRequestSerial !== rcDeferredRequestSerial`,
 		`rcLoadAgentInternals(sc.status, rcAgentInternalsRunning(sc.status))`,
-		`appType, identitySummary`,
+		`appType, rawIdentitySummary, identitySummary`,
 		`access.state || '', access.label || '', access.detail || ''`,
 		`objectives.map(item => [item.id, item.met, item.priority, item.question, item.next])`,
 		`areas.map(item => [item.id || item.name, item.priority, rcArray(item.endpoints).length])`,
@@ -244,6 +268,43 @@ func TestReconRefreshesRunningInternalsAndSemanticCorrections(t *testing.T) {
 		if !strings.Contains(html, contract) {
 			t.Fatalf("Recon refresh contract missing %q", contract)
 		}
+	}
+}
+
+func TestReconLandingPrioritizesActionableSignalsOverInventory(t *testing.T) {
+	raw, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	for _, contract := range []string{
+		`function rcConciseIdentitySummary`,
+		`candidate route${routeCount === 1 ? '' : 's'} still need direct response evidence`,
+		`Priority testing leads`,
+		`Unconfirmed input and reflection signals only.`,
+		`Review in Findings`,
+		`const visibleRows = actionableRows.map((lead,index)`,
+		`directivePaths.includes(route)`,
+		`telemetry/system field`,
+		`a lead is only “tested” when a matching active-test directive completes`,
+		`<div id="rcSurfaceSummary">${rcRenderSurfaceBrief`,
+	} {
+		if !strings.Contains(html, contract) {
+			t.Fatalf("compact Recon landing contract missing %q", contract)
+		}
+	}
+
+	start := strings.Index(html, "async function renderReconCommandCenter")
+	end := strings.Index(html[start:], "function rcRenderSurfaceBrief")
+	if start < 0 || end < 0 {
+		t.Fatal("could not isolate Recon renderer")
+	}
+	renderer := html[start : start+end]
+	leads := strings.Index(renderer, `<div id="rcLeads">`)
+	surfaceDisclosure := strings.Index(renderer, `id="rcSurfaceDisclosure"`)
+	surfaceSummary := strings.Index(renderer, `id="rcSurfaceSummary"`)
+	if leads < 0 || surfaceDisclosure < 0 || surfaceSummary < 0 || surfaceSummary < surfaceDisclosure {
+		t.Fatal("surface inventory must remain behind the Observed surface disclosure")
 	}
 }
 
@@ -302,5 +363,29 @@ func TestReconCommandCenterKeepsRawInventoryBehindDrillDowns(t *testing.T) {
 		if !strings.Contains(renderer, drilldown) {
 			t.Fatalf("Recon renderer missing drill-down %q", drilldown)
 		}
+	}
+}
+
+func TestReconDiscoveryLocateUsesDecodedExactGraphFocus(t *testing.T) {
+	raw, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(raw)
+	for _, contract := range []string{
+		`data-copilot-url="${escAttr(url)}"`,
+		`function decodeGraphFocusValue(raw)`,
+		`function graphFocusCanonicalURL(raw)`,
+		`function graphFocusDisplayQuery(raw)`,
+		`function focusTargetTree(raw)`,
+		`targetTreeState.selected=exact.id`,
+		`focusTargetTree(query)`,
+	} {
+		if !strings.Contains(html, contract) {
+			t.Fatalf("Recon discovery Graph focus missing %q", contract)
+		}
+	}
+	if strings.Contains(html, `openCopilotEvidence('discovery','${Number(d.id)||id}','${encodedURL}')`) {
+		t.Fatal("Locate in target graph still passes an encodeURIComponent value as the visible search query")
 	}
 }

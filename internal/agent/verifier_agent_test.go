@@ -668,6 +668,73 @@ func TestBrowserXSSCandidateURLsKeepSPAHashRouteScoped(t *testing.T) {
 	}
 }
 
+func TestBrowserXSSProofPathAttributesExecutingRoute(t *testing.T) {
+	tests := map[string]string{
+		"http://shop.example/#/search?q=payload":       "/#/search",
+		"http://shop.example/app/#/search?q=payload":   "/app/#/search",
+		"http://shop.example/rest/products/search?q=x": "/rest/products/search",
+	}
+	for rawURL, want := range tests {
+		if got := browserXSSProofPath(rawURL); got != want {
+			t.Fatalf("browserXSSProofPath(%q) = %q, want %q", rawURL, got, want)
+		}
+	}
+}
+
+func TestUnmarshalSingleModelObjectAcceptsOneElementVerdictArray(t *testing.T) {
+	var verdict idorVerdict
+	err := unmarshalSingleModelObject(
+		`[{"is_idor":true,"confidence":0.91,"severity":"high","evidence":"distinct owners"}]`,
+		&verdict,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verdict.IsIDOR || verdict.Confidence != 0.91 || verdict.Severity != "high" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+	if err := unmarshalSingleModelObject(`[{"is_idor":true},{"is_idor":false}]`, &verdict); err == nil {
+		t.Fatal("ambiguous multi-verdict array should be rejected")
+	}
+}
+
+func TestUnmarshalSingleModelObjectAcceptsNumericIDORIdentifiers(t *testing.T) {
+	var verdict idorVerdict
+	err := unmarshalSingleModelObject(
+		"```json\n"+
+			`{"is_idor":true,"confidence":0.98,"severity":"high","evidence":"distinct owners","affected_ids":[1,2,"3"]}`+
+			"\n```",
+		&verdict,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(verdict.AffectedIDs, ","); got != "1,2,3" {
+		t.Fatalf("affected ids = %q, want 1,2,3", got)
+	}
+}
+
+func TestUnmarshalSingleModelObjectRepairsDroppedVerdictPrefix(t *testing.T) {
+	var verdict idorVerdict
+	err := unmarshalSingleModelObject(
+		`_idor": false,
+  "confidence": 0.95,
+  "severity": "low",
+  "evidence": "Responses were identical.",
+  "affected_ids": [],
+  "first_person_reasoning": "No cross-user response."
+}
+`+"```",
+		&verdict,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.IsIDOR || verdict.Confidence != 0.95 || verdict.Evidence == "" {
+		t.Fatalf("verdict = %+v", verdict)
+	}
+}
+
 func TestBrowserXSSCandidateURLsStayWithinMountedAppPrefix(t *testing.T) {
 	got := browserXSSCandidateURLs("http://127.0.0.1:8085/WebGoat/start.mvc", "http://127.0.0.1:8085/WebGoat/search?q=test", "q", `<iframe src="javascript:alert(`+"`xss`"+`)">`)
 	if len(got) == 0 {
@@ -2616,6 +2683,20 @@ func TestSensitiveAPIExposureSignal(t *testing.T) {
 			}`,
 		},
 		{
+			name:        "uppercase i18n catalogue fields are not personal data",
+			contentType: "application/json",
+			body: `{
+				"LANGUAGE":"English",
+				"NAV_SEARCH":"Search",
+				"MANDATORY_EMAIL":"Please provide an email address.",
+				"LABEL_PASSWORD":"Password",
+				"PHONE_NUMBER":"Phone Number",
+				"IP_ADDRESS":"IP Address",
+				"INVALID_EMAIL":"Please provide a valid email address.",
+				"PASSWORD_ADVICE":"Use a strong password."
+			}`,
+		},
+		{
 			name:          "small real password field is still detected",
 			contentType:   "application/json",
 			body:          `{"username":"alice","password":"correcthorsebatterystaple"}`,
@@ -3287,6 +3368,10 @@ func TestCommandInjectionCandidateHelpers(t *testing.T) {
 	if len(got) == 0 || got[0] != "ipaddress" {
 		t.Fatalf("commandInjectionParamCandidates() = %#v, want ipaddress first", got)
 	}
+	got = commandInjectionParamCandidates("/vulnerabilities/exec/", "")
+	if len(got) == 0 || got[0] != "ip" {
+		t.Fatalf("DVWA exec command candidates = %#v, want ip first", got)
+	}
 	got = commandInjectionParamCandidates("/network/ping", "host=127.0.0.1&debug=1")
 	if len(got) < 1 || got[0] != "host" {
 		t.Fatalf("query-derived candidates = %#v, want host first", got)
@@ -3369,6 +3454,18 @@ func TestFileReadTraversalCandidateHelpers(t *testing.T) {
 	if len(got) < 1 || got[0] != "path" {
 		t.Fatalf("query-derived file-read candidates = %#v, want path first", got)
 	}
+	got = fileReadParamCandidates("/vulnerabilities/xss_r/", "name=alice")
+	if len(got) != 0 {
+		t.Fatalf("generic name parameter on non-file path = %#v, want no file-read candidates", got)
+	}
+	got = fileReadParamCandidates("/download", "name=report.pdf")
+	if len(got) < 1 || got[0] != "name" {
+		t.Fatalf("name parameter on file-like path = %#v, want name first", got)
+	}
+	got = fileReadParamCandidates("/vulnerabilities/fi/", "page=include.php")
+	if len(got) < 1 || got[0] != "page" {
+		t.Fatalf("file inclusion page candidates = %#v, want page first", got)
+	}
 	got = fileReadParamCandidates("/VulnerableApp/PathTraversal/LEVEL_12", "")
 	if !reflect.DeepEqual(got, []string{"fileName"}) {
 		t.Fatalf("path traversal lesson candidates = %#v, want fileName only", got)
@@ -3390,8 +3487,16 @@ func TestFileReadTraversalCandidateHelpers(t *testing.T) {
 	if !foundNullByte {
 		t.Fatalf("fileReadTraversalPayloads() = %#v, want null-byte secret payload", payloads)
 	}
+	lfiPayloads := fileReadTraversalPayloads(fileReadTraversalCandidate{Path: "/vulnerabilities/fi/", ParamName: "page"})
+	if len(lfiPayloads) == 0 || lfiPayloads[0].Value != "php://filter/read=convert.base64-encode/resource=include.php" {
+		t.Fatalf("file inclusion payloads = %#v, want PHP filter first", lfiPayloads)
+	}
 	if got := fileReadTraversalDisplayValue("secret.json\x00UserInfo.json"); got != "secret.json%00UserInfo.json" {
 		t.Fatalf("fileReadTraversalDisplayValue() = %q", got)
+	}
+	param, payload := fileReadInclusionParamAndPayloadFromRawQuery("page=php%3A%2F%2Ffilter%2Fconvert.base64-encode%2Fresource%3Dindex.php")
+	if param != "page" || payload != "php://filter/convert.base64-encode/resource=index.php" {
+		t.Fatalf("file inclusion query parse = (%q,%q)", param, payload)
 	}
 }
 
@@ -3414,6 +3519,18 @@ func TestFileReadTraversalSignal(t *testing.T) {
 	}
 	if got := fileReadTraversalSignal(404, secret, "secret.json", 200, baseline); got != "" {
 		t.Fatalf("404 signal = %q, want dismissed", got)
+	}
+	loginHTML := `<html><form><input name="username"><input name="password" type="password"></form></html>`
+	if got := fileReadTraversalSignal(200, loginHTML, "secret.json", 200, "<html>baseline</html>"); got != "" {
+		t.Fatalf("login HTML signal = %q, want dismissed", got)
+	}
+	credentialJSON := `{"username":"admin","password":"secret"}`
+	if got := fileReadTraversalSignal(200, credentialJSON, "secret.json", 200, baseline); got != "credential-like JSON file content" {
+		t.Fatalf("credential JSON signal = %q", got)
+	}
+	phpSource := base64.StdEncoding.EncodeToString([]byte("<?php\ninclude($_GET['page']);\nini_get('allow_url_include');\n"))
+	if got := fileReadTraversalSignal(200, phpSource, "php://filter/read=convert.base64-encode/resource=include.php", 200, baseline); got != "PHP source disclosure via local file inclusion" {
+		t.Fatalf("PHP source disclosure signal = %q", got)
 	}
 }
 
@@ -3472,6 +3589,50 @@ func TestProbeObservedErrorDisclosuresDoesNotDeadlockWhileWritingFindings(t *tes
 	}
 }
 
+func TestProbeObservedFileInclusionSourceDisclosuresPromotesPHPFilterTraffic(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "verifier.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	scanID, err := db.CreateScan("https://example.test", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := base64.StdEncoding.EncodeToString([]byte("<?php\ninclude($_GET['page']);\nini_get('allow_url_include');\n"))
+	rawURL := "https://example.test/vulnerabilities/fi/?page=php%3A%2F%2Ffilter%2Fconvert.base64-encode%2Fresource%3Dinclude.php"
+	_, err = db.Conn().Exec(`
+		INSERT INTO traffic (
+			scan_id, method, url, host, path, query,
+			request_headers, request_body,
+			status_code, response_headers, response_body,
+			content_type, response_size, endpoint_hash,
+			is_filtered
+		) VALUES (?, 'GET', ?, 'example.test', '/vulnerabilities/fi/', 'page=php%3A%2F%2Ffilter%2Fconvert.base64-encode%2Fresource%3Dinclude.php',
+			'{}', NULL,
+			200, '{}', ?,
+			'text/html; charset=utf-8', ?, 'GET:/vulnerabilities/fi/',
+			FALSE)`, scanID, rawURL, []byte(body), len(body))
+	if err != nil {
+		t.Fatalf("insert traffic: %v", err)
+	}
+
+	verifier := &VerifierAgent{
+		db:     db,
+		scanID: scanID,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	verifier.probeObservedFileInclusionSourceDisclosures(context.Background())
+
+	var title, payload string
+	if err := db.Conn().QueryRow(`SELECT title, payload FROM findings WHERE scan_id=? AND vuln_type='file_inclusion'`, scanID).Scan(&title, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(title, "Local file inclusion") || !strings.Contains(payload, "php://filter") {
+		t.Fatalf("finding = (%q,%q)", title, payload)
+	}
+}
+
 // TestVerifierIssueRouting documents which issue strings route to which
 // verifier methods. Added after the scan 29/30 findings showed the
 // analyzer was flagging "unvalidated redirect" and the router was only
@@ -3497,6 +3658,10 @@ func TestVerifierIssueRouting(t *testing.T) {
 		{"Open redirect on /login endpoint", "open_redirect"},
 		{"Redirects to arbitrary URLs based on 'to' parameter", "open_redirect"},
 		{"Arbitrary redirect via next parameter", "open_redirect"},
+
+		// SSRF / OAST
+		{"SSRF in url parameter", "ssrf"},
+		{"Server-side request forgery through webhook URL", "ssrf"},
 
 		// LDAP injection should not fall into generic SQLi probes.
 		{"LDAP injection in username filter", "ldap"},
@@ -3553,6 +3718,10 @@ func classifyIssueRoute(issue string) string {
 		strings.Contains(issueLower, "redirect to arbitrary") ||
 		strings.Contains(issueLower, "redirects to arbitrary"):
 		return "open_redirect"
+	case strings.Contains(issueLower, "ssrf") ||
+		strings.Contains(issueLower, "server-side request forgery") ||
+		strings.Contains(issueLower, "server side request forgery"):
+		return "ssrf"
 	case strings.Contains(issueLower, "ldap"):
 		return "ldap"
 	case strings.Contains(issueLower, "sql") ||
@@ -3899,6 +4068,7 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 		body       string
 		wantMatch  bool
 		wantTitleC string // substring expected in Title when match=true
+		wantType   string
 	}{
 		{
 			name:       "juice shop via application-version path",
@@ -3907,6 +4077,7 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 			body:       `{"version":"14.5.0"}`,
 			wantMatch:  true,
 			wantTitleC: "Juice Shop 14.5.0",
+			wantType:   "training_application_exposure",
 		},
 		{
 			name:       "juice shop via body hint on generic path",
@@ -3915,6 +4086,7 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 			body:       `{"app":"owasp-juice-shop","version":"15.0.1"}`,
 			wantMatch:  true,
 			wantTitleC: "Juice Shop 15.0.1",
+			wantType:   "training_application_exposure",
 		},
 		{
 			name:       "express pre-3.0 pin",
@@ -3923,6 +4095,7 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 			body:       `Powered by Express 2.5.11`,
 			wantMatch:  true,
 			wantTitleC: "Express 2.5.11",
+			wantType:   "vulnerable_component",
 		},
 		{
 			name:      "modern express not flagged",
@@ -3944,6 +4117,7 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 			version:   "16.0.0",
 			body:      `{"version":"16.0.0"}`,
 			wantMatch: true,
+			wantType:  "training_application_exposure",
 		},
 	}
 	for _, tc := range tests {
@@ -3959,8 +4133,8 @@ func TestEvaluateVersionKnownVulns(t *testing.T) {
 			if tc.wantTitleC != "" && !containsStr(f.Title, tc.wantTitleC) {
 				t.Errorf("title = %q, want substring %q", f.Title, tc.wantTitleC)
 			}
-			if f.VulnType != "vulnerable_component" {
-				t.Errorf("VulnType = %q, want vulnerable_component", f.VulnType)
+			if f.VulnType != tc.wantType {
+				t.Errorf("VulnType = %q, want %q", f.VulnType, tc.wantType)
 			}
 		})
 	}
