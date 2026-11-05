@@ -84,6 +84,7 @@ func New(listenAddr string, port int, certDir string, callback TrafficCallback,
 
 	// Intercept requests — capture request data, store in context
 	gp.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		req = executionPolicy.WithInjectedHeaders(req)
 		decision := executionPolicy.AuthorizeHTTPRequest(req, browserCredentialOrigin(req, credentialOrigin))
 		policyAllowed := decision.Allowed
 		forceFiltered := false

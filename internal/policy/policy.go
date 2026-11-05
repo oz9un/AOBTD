@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -59,6 +60,11 @@ type Decision struct {
 type Engine struct {
 	authority TestingAuthority
 	scope     Scope
+
+	// Operator-supplied headers (e.g. Authorization), bound to one origin.
+	// Set once before the scan starts; read-only afterwards.
+	headerOrigin Origin
+	headers      http.Header
 }
 
 // New constructs a policy engine from explicit operator authority and scope.

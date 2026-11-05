@@ -111,6 +111,7 @@ type policyTransport struct {
 }
 
 func (t *policyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = t.engine.WithInjectedHeaders(req)
 	decision := t.engine.AuthorizeHTTPRequest(req, t.opts.CredentialOrigin)
 	if !decision.Allowed {
 		auditDenied(t.opts.Audit, decision)
