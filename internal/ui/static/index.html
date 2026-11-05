@@ -7545,6 +7545,15 @@ tr.selected td { background: rgba(255,79,216,.08); }
 	            or sent to the LLM prompt.
 	          </div>
 	        </div>
+        <label class="nm-field">
+          <span class="nm-field-label">Extra headers</span>
+          <textarea class="nm-input nm-input-mono" id="scanHeaders" rows="2"
+            placeholder="Authorization: Bearer eyJhbGci...&#10;X-API-Key: abc123"></textarea>
+        </label>
+        <div class="nm-hint-small">
+          One <code>Name: value</code> per line. Sent only to the target origin, with either auth method.
+          Passed via env var (never argv); masked in LLM prompts.
+        </div>
 	      </div>
 	    </div>
       </div>
@@ -16938,6 +16947,7 @@ async function startNewScan() {
         base_url: baseURL,  // openai-compatible only; ignored by other providers
         budget_cents: budgetCents,
         session_cookie: sessionCookie,
+        headers: (document.getElementById('scanHeaders')?.value || '').trim(),
 	        login_url: loginURL,
 	        login_user: loginUser,
 	        login_pass: loginPass,

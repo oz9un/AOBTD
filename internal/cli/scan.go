@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -65,6 +66,7 @@ func NewScanCmd() *cobra.Command {
 		budgetCents            int
 		analysisEndpointLimit  int
 		sessionCookie          string
+		extraHeaders           []string
 		loginAPIURL            string
 		loginURL               string
 		loginUser              string
@@ -121,6 +123,7 @@ func NewScanCmd() *cobra.Command {
 				budgetCents:            budgetCents,
 				analysisEndpointLimit:  analysisEndpointLimit,
 				sessionCookie:          sessionCookie,
+				extraHeaders:           extraHeaders,
 				loginAPIURL:            loginAPIURL,
 				loginURL:               loginURL,
 				loginUser:              loginUser,
@@ -171,6 +174,7 @@ func NewScanCmd() *cobra.Command {
 	cmd.Flags().IntVar(&budgetCents, "budget", 500, "Max LLM cost in cents (0 = no cap; useful for token-subscription providers like MiniMax). Default $5.00")
 	cmd.Flags().IntVar(&analysisEndpointLimit, "analysis-endpoint-limit", 0, "Max endpoint families the Analyzer may process per pass (0 = unlimited)")
 	cmd.Flags().StringVar(&sessionCookie, "session-cookie", "", "Session cookie to inject into the browser before crawling (e.g. 'sid=abc123; user=42'). Falls back to AOBTD_SESSION_COOKIE env var.")
+	cmd.Flags().StringArrayVarP(&extraHeaders, "header", "H", nil, "Extra request header sent only to the target origin, e.g. -H 'Authorization: Bearer xyz' (repeatable). Falls back to AOBTD_HEADERS env var (one header per line).")
 	cmd.Flags().StringVar(&loginAPIURL, "login-api-url", "", "Optional JSON API login URL. When set with login credentials, AOBTD captures a token and seeds browser storage before crawling. Falls back to AOBTD_LOGIN_API_URL.")
 	cmd.Flags().StringVar(&loginURL, "login-url", "", "URL of a login form. When --login-user and --login-pass are also set, AOBTD logs in before crawling. Falls back to AOBTD_LOGIN_URL env var.")
 	cmd.Flags().StringVar(&loginUser, "login-user", "", "Username for form login. Falls back to AOBTD_LOGIN_USER env var.")
@@ -325,7 +329,8 @@ type scanOpts struct {
 	llmOutputTokenBudget  int
 	budgetCents           int
 	analysisEndpointLimit int
-	sessionCookie         string // raw "Cookie:" header value; empty = unauthenticated scan
+	sessionCookie         string   // raw "Cookie:" header value; empty = unauthenticated scan
+	extraHeaders          []string // "Name: value" lines injected on target-origin requests
 	// API/form login: when credentials are set, AOBTD tries API token seeding
 	// first if loginAPIURL is present, then falls back to form login.
 	loginAPIURL string
@@ -441,8 +446,25 @@ func resolveTargetRelativeURL(target, raw string) string {
 	return base.ResolveReference(ref).String()
 }
 
+// scanExtraHeaders parses --header, falling back to AOBTD_HEADERS (one per line)
+// so UI-launched scans keep tokens out of argv.
+func scanExtraHeaders(opts scanOpts) (http.Header, error) {
+	lines := opts.extraHeaders
+	if len(lines) == 0 {
+		lines = strings.Split(os.Getenv("AOBTD_HEADERS"), "\n")
+	}
+	headers, err := policy.ParseHeaders(lines)
+	if err != nil {
+		return nil, fmt.Errorf("--header: %w", err)
+	}
+	return headers, nil
+}
+
 func scanHasPreconfiguredAuth(opts scanOpts) bool {
 	if firstNonEmptySecret(opts.sessionCookie, os.Getenv("AOBTD_SESSION_COOKIE")) != "" {
+		return true
+	}
+	if headers, err := scanExtraHeaders(opts); err == nil && policy.HasSensitiveRequestHeaders(headers) {
 		return true
 	}
 	user := firstNonEmpty(opts.loginUser, os.Getenv("AOBTD_LOGIN_USER"))
@@ -647,6 +669,13 @@ func runScan(opts scanOpts) (retErr error) {
 	executionPolicy, err := policy.New(testingAuthority, policyScope)
 	if err != nil {
 		return fmt.Errorf("create execution policy: %w", err)
+	}
+	headers, err := scanExtraHeaders(opts)
+	if err != nil {
+		return err
+	}
+	if err := executionPolicy.SetInjectedHeaders(opts.target, headers); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(opts.output, 0o755); err != nil {

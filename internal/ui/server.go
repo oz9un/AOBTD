@@ -5565,6 +5565,7 @@ type scanStartRequest struct {
 	BaseURL                string   `json:"base_url"`          // optional: openai-compatible endpoint (MiniMax, DeepSeek, self-hosted vLLM, …)
 	BudgetCents            int      `json:"budget_cents"`      // dollar cap in cents; 0 = unlimited
 	SessionCookie          string   `json:"session_cookie"`    // optional: cookie injected into browser before crawl
+	Headers                string   `json:"headers"`           // optional: "Name: value" lines sent to the target origin
 	LoginURL               string   `json:"login_url"`         // optional: form-login URL
 	LoginUser              string   `json:"login_user"`        // optional: form-login username
 	LoginPass              string   `json:"login_pass"`        // optional: form-login password
@@ -5917,6 +5918,10 @@ func (s *Server) handleScanStart(w http.ResponseWriter, r *http.Request) {
 	if req.SessionCookie != "" {
 		cmd.Env = append(cmd.Env, "AOBTD_SESSION_COOKIE="+req.SessionCookie)
 	}
+	hasHeaders := strings.TrimSpace(req.Headers) != ""
+	if hasHeaders {
+		cmd.Env = append(cmd.Env, "AOBTD_HEADERS="+req.Headers)
+	}
 	if req.LoginURL != "" && req.LoginUser != "" && req.LoginPass != "" {
 		cmd.Env = append(cmd.Env,
 			"AOBTD_LOGIN_URL="+req.LoginURL,
@@ -5960,7 +5965,7 @@ func (s *Server) handleScanStart(w http.ResponseWriter, r *http.Request) {
 		TestingAuthority: testingAuthority,
 		StartedAt:        time.Now(),
 		PID:              cmd.Process.Pid,
-		Authenticated:    req.SessionCookie != "" || (req.LoginURL != "" && req.LoginUser != "" && req.LoginPass != ""),
+		Authenticated:    req.SessionCookie != "" || hasHeaders || (req.LoginURL != "" && req.LoginUser != "" && req.LoginPass != ""),
 		MaxIDBefore:      maxIDBefore,
 	}
 	if req.ContinuousReconMinutes > 0 {
